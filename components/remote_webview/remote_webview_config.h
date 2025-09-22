@@ -11,9 +11,10 @@ inline constexpr int decode_queue_depth = 12;
 
 inline constexpr size_t ws_max_message_bytes = 64 * 1024;
 inline constexpr size_t ws_buffer_size = 30 * 1024;
+inline constexpr size_t ws_keepalive_interval_us = 60 * 1000 * 1000;
 
-inline constexpr bool     coalesce_moves = true;
-inline constexpr uint32_t move_rate_hz   = 60;
+inline constexpr bool coalesce_moves = true;
+inline constexpr uint32_t move_rate_hz = 60;
 
 } // namespace cfg
 } // namespace remote_webview

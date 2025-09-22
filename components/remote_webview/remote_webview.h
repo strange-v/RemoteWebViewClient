@@ -30,6 +30,7 @@ class RemoteWebView : public Component {
   void set_min_frame_interval(int v) { min_frame_interval_ = v; }
   void set_jpeg_quality(int v) { jpeg_quality_ = v; }
   void set_max_bytes_per_msg(int v) { max_bytes_per_msg_ = v; }
+  bool open_url(const std::string &s);
 
   void setup() override;
   void loop() override {}
@@ -69,6 +70,7 @@ class RemoteWebView : public Component {
   int max_bytes_per_msg_{-1};
 
   uint64_t last_move_us_{0};
+  uint64_t last_keepalive_us_{0};
   
   uint64_t frame_start_us_ = 0;
   uint32_t frame_id_{0xffffffffu};
@@ -103,6 +105,7 @@ class RemoteWebView : public Component {
   JPEGDEC jd_;
 
   bool ws_send_touch_event_(proto::TouchType type, int x, int y, uint8_t pid);
+  bool ws_send_keepalive_();
   bool ws_send_open_url_(const char *url, uint16_t flags);
 
   std::string resolve_device_id_() const;

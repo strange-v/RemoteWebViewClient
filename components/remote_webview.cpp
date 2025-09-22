@@ -69,20 +69,6 @@ void RemoteWebView::dump_config() {
   print_opt_int   ("max_bytes_per_msg",         max_bytes_per_msg_);
 }
 
-bool RemoteWebView::open_url(const std::string &s) {
-  if (s.empty()) return false;
-  
-  if (!ws_client_ || !esp_websocket_client_is_connected(ws_client_))
-    return false;
-  
-  if (ws_send_open_url_(s.c_str(), 0)) {
-    url_ = s;
-    ESP_LOGI(TAG, "opened URL: %s", s.c_str());
-    return true;
-  }
-  
-  return false;
-}
 
 void RemoteWebView::start_ws_task_() {
   xTaskCreatePinnedToCore(&RemoteWebView::ws_task_tramp_, "rwv_ws", cfg::ws_task_stack, this, 5, &t_ws_, 0);
@@ -417,8 +403,6 @@ bool RemoteWebView::ws_send_keepalive_() {
   xSemaphoreGive(ws_send_mtx_);
   return r == (int)n;
 }
-
-
 
 void RemoteWebViewTouchListener::update(const touchscreen::TouchPoints_t &pts) {
   if (!parent_) return;
