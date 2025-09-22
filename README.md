@@ -157,21 +157,21 @@ remote_webview:
 
 ### Supported Parameters
 
-| YAML key                | Type      | Required | Example                          | Valid range / format        | Description |
-|-------------------------|-----------|:--------:|----------------------------------|-----------------------------|-------------|
-| `display_id`            | id        | ✅       | `panel`                           | ID of a configured display  | Display to draw on. |
-| `touchscreen_id`        | id        | ❌       | `touch`                           | ID of a configured touchscreen | Optional touch input source. When present, touch events (down/move/up) are sent to the server. |
-| `server`                | string    | ✅       | `172.16.0.252:8081`              | `host:port`                 | WebSocket server address. Must be `hostname_or_IP:port`. |
-| `url`                   | string    | ✅       | `http://…/dashboard`             | Absolute HTTP/HTTPS URL     | Page to open on connect. |
-| `device_id`             | string    | ❌       | `"my-device"` or auto (`esp32-<mac>`) | non-empty string       | Identifier used by the server. If not set, the component derives `esp32-<mac>` from the chip MAC and still sends it. |
-| `tile_size`             | int       | ❌       | `32`                              | `> 0`                      | Tile edge size in pixels. Helps the server choose tile packing; it’s best to keep it a multiple of 16. |
-| `full_frame_tile_count` | int       | ❌       | `4`                               | `> 0`                      | Number of tiles the server should use for full-frame updates. |
-| `full_frame_area_threshold` | float | ❌       | `0.50`                            | `0.0 … 1.0`                | Area delta (fraction of screen) above which the server should send a full frame. |
-| `full_frame_every`      | int       | ❌       | `50`                              | `>= 0`                     | Force a full-frame update every N frames (0 disables). |
-| `every_nth_frame`       | int       | ❌       | `1`                               | `>= 1`                     | Frame-rate divider. Server should send only every Nth frame. |
-| `min_frame_interval`    | int (ms)  | ❌       | `80`                              | `>= 0`                     | Minimum time between frames on the wire, in milliseconds. |
-| `jpeg_quality`          | int       | ❌       | `85`                              | `1 … 100`                  | JPEG quality hint for the server’s encoder. |
-| `max_bytes_per_msg`     | int (B)   | ❌       | `14336` or `61440`                | `> 0`                      | Upper bound for a single WS binary message. |
+| YAML key                | Type      | Required | Example                          | Description |
+|-------------------------|-----------|:--------:|----------------------------------|-------------|
+| `display_id`            | id        | ✅       | `panel`                           | Display to draw on. |
+| `touchscreen_id`        | id        | ❌       | `touch`                           | Optional touch input source. When present, touch events (down/move/up) are sent to the server. |
+| `server`                | string    | ✅       | `172.16.0.252:8081`              | WebSocket server address. Must be `hostname_or_IP:port`. |
+| `url`                   | string    | ✅       | `http://…/dashboard`             | Page to open on connect. |
+| `device_id`             | string    | ❌       | `"my-device"` or auto (`esp32-<mac>`) | Identifier used by the server. If not set, the component derives `esp32-<mac>` from the chip MAC and still sends it. |
+| `tile_size`             | int       | ❌       | `32`                              | Tile edge size in pixels. Helps the server choose tile packing; it’s best to keep it a multiple of 16. |
+| `full_frame_tile_count` | int       | ❌       | `4`                               | Number of tiles the server should use for full-frame updates. |
+| `full_frame_area_threshold` | float | ❌       | `0.50`                            | Area delta (fraction of screen) above which the server should send a full frame. |
+| `full_frame_every`      | int       | ❌       | `50`                              | Force a full-frame update every N frames (0 disables). |
+| `every_nth_frame`       | int       | ❌       | `1`                               | Frame-rate divider. Server should send only every Nth frame. |
+| `min_frame_interval`    | int (ms)  | ❌       | `80`                              | Minimum time between frames on the wire, in milliseconds. |
+| `jpeg_quality`          | int       | ❌       | `85`                              | JPEG quality hint for the server’s encoder. |
+| `max_bytes_per_msg`     | int (B)   | ❌       | `14336` or `61440`                | Upper bound for a single WS binary message. |
 
 ## Standalone clients
 
