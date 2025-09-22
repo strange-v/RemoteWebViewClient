@@ -1,0 +1,5 @@
+name: remote_webview
+dependencies:
+  - espressif/esp_websocket_client
+  - espressif/esp-dsp
+  - jpegdec

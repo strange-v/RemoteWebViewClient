@@ -1,12 +1,178 @@
 # Remote WebView Client
 
-Here you can find test clients for [Remote WebView Server](https://github.com/strange-v/RemoteWebViewServer)
+![Guition-ESP32-S3-4848S040 running Remote WebView](/images/image-001.jpg)
 
-## Guition-ESP32-S3-4848S040
-Implements the simplest (and likely fastest) rendering path: JPEG tiles are decoded and written directly into the panel’s line buffer.
+Here you can find clients for [Remote WebView Server](https://github.com/strange-v/RemoteWebViewServer) — headless browser that renders target web pages (e.g., Home Assistant dashboards) and streams them as image tiles over WebSocket to lightweight clients (ESP32 displays).
 
-### Trade-offs
+## ESPHome component
 
-- Slight tearing during fast scrolls or big updates.
-- Brief blur/compression artifacts on fine text (JPEG).
-- Occasional stale patches until the next refresh/full-frame.
+The latest version of the client is implemented as an ESPHome external component, which greatly simplifies installation and configuration for end users. It leverages the display and touchscreen components to render images and handle touch input.
+
+### Configuration example (Guition-ESP32-S3-4848S040)
+
+```yaml
+esphome:
+  name: esp32-4848s040-t1
+  friendly_name: ESP32-4848S040-T1
+  platformio_options:
+    board_build.flash_mode: dio
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      COMPILER_OPTIMIZATION_SIZE: y
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+    components:
+      - name: "espressif/esp_websocket_client"
+        ref: 1.5.0
+      - name: "espressif/esp-dsp"
+        ref: 1.7.0
+      - name: "bitbank2/jpegdec"
+        source: https://github.com/strange-v/jpegdec-esphome
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+external_components:
+  - source:
+      type: local
+      path: my_components
+    components: [ remote_webview ]
+
+logger:
+  hardware_uart: UART0
+
+api:
+  encryption:
+    key: "XXXXXXXXX"
+
+ota:
+  - platform: esphome
+    password: "XXXXXXXXX"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+captive_portal:
+    
+spi:
+  clk_pin: GPIO48
+  mosi_pin: GPIO47
+
+i2c:
+  - id: bus_a
+    sda: GPIO19
+    scl: GPIO45
+
+display:
+  - platform: st7701s
+    id: my_display
+    show_test_card: False
+    update_interval: never
+    auto_clear_enabled: False
+    spi_mode: MODE3
+    data_rate: 2MHz
+    color_order: RGB
+    invert_colors: False
+    dimensions:
+      width: 480
+      height: 480
+    cs_pin: 39
+    de_pin: 18
+    hsync_pin: 16
+    vsync_pin: 17
+    pclk_pin: 21
+    pclk_frequency: 12MHz
+    pclk_inverted: False
+    hsync_pulse_width: 8
+    hsync_front_porch: 10
+    hsync_back_porch: 20
+    vsync_pulse_width: 8
+    vsync_front_porch: 10
+    vsync_back_porch: 10
+    init_sequence:
+      - 1
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x10]
+      - [0xCD, 0x00]
+    data_pins:
+      red:
+        - GPIO11
+        - GPIO12
+        - GPIO13
+        - GPIO14
+        - GPIO0
+      green:
+        - GPIO8
+        - GPIO20
+        - GPIO3
+        - GPIO46
+        - GPIO9
+        - GPIO10
+      blue:
+        - GPIO4
+        - GPIO5
+        - GPIO6
+        - GPIO7
+        - GPIO15
+
+touchscreen:
+  platform: gt911
+  transform:
+    mirror_x: false
+    mirror_y: false
+  i2c_id: bus_a
+  id: my_touchscreen
+  display: my_display
+
+output:
+  - platform: ledc
+    pin: GPIO38
+    id: backlight_pwm
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: "Display Backlight"
+    id: back_light
+    restore_mode: ALWAYS_ON
+
+remote_webview:
+  display_id: my_display
+  touchscreen_id: my_touchscreen
+  server: 172.16.0.252:8081
+  url: http://172.16.0.252:8123/dashboard-mobile/0
+  max_bytes_per_msg: 61440
+
+```
+
+### Supported Parameters
+
+| YAML key                | Type      | Required | Example                          | Valid range / format        | Description |
+|-------------------------|-----------|:--------:|----------------------------------|-----------------------------|-------------|
+| `display_id`            | id        | ✅       | `panel`                           | ID of a configured display  | Display to draw on. |
+| `touchscreen_id`        | id        | ❌       | `touch`                           | ID of a configured touchscreen | Optional touch input source. When present, touch events (down/move/up) are sent to the server. |
+| `server`                | string    | ✅       | `172.16.0.252:8081`              | `host:port`                 | WebSocket server address. Must be `hostname_or_IP:port`. |
+| `url`                   | string    | ✅       | `http://…/dashboard`             | Absolute HTTP/HTTPS URL     | Page to open on connect. |
+| `device_id`             | string    | ❌       | `"my-device"` or auto (`esp32-<mac>`) | non-empty string       | Identifier used by the server. If not set, the component derives `esp32-<mac>` from the chip MAC and still sends it. |
+| `tile_size`             | int       | ❌       | `32`                              | `> 0`                      | Tile edge size in pixels. Helps the server choose tile packing; it’s best to keep it a multiple of 16. |
+| `full_frame_tile_count` | int       | ❌       | `4`                               | `> 0`                      | Number of tiles the server should use for full-frame updates. |
+| `full_frame_area_threshold` | float | ❌       | `0.50`                            | `0.0 … 1.0`                | Area delta (fraction of screen) above which the server should send a full frame. |
+| `full_frame_every`      | int       | ❌       | `50`                              | `>= 0`                     | Force a full-frame update every N frames (0 disables). |
+| `every_nth_frame`       | int       | ❌       | `1`                               | `>= 1`                     | Frame-rate divider. Server should send only every Nth frame. |
+| `min_frame_interval`    | int (ms)  | ❌       | `80`                              | `>= 0`                     | Minimum time between frames on the wire, in milliseconds. |
+| `jpeg_quality`          | int       | ❌       | `85`                              | `1 … 100`                  | JPEG quality hint for the server’s encoder. |
+| `max_bytes_per_msg`     | int (B)   | ❌       | `14336` or `61440`                | `> 0`                      | Upper bound for a single WS binary message. |
+
+## Standalone clients
+
+Arduino and ESP-IDF clients are deprecated for now. They were used during the PoC/development phase, but I don’t like the idea of supporting multiple codebases for the same project (not everything can be reused as-is due to different ESP-IDF versions, tooling, etc.). However, if demand for a standalone client is high, I may release one.
