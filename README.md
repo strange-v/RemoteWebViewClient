@@ -2,7 +2,7 @@
 
 ![Guition-ESP32-S3-4848S040 running Remote WebView](/images/image-001.jpg)
 
-Here you can find clients for [Remote WebView Server](https://github.com/strange-v/RemoteWebViewServer) — headless browser that renders target web pages (e.g., Home Assistant dashboards) and streams them as image tiles over WebSocket to lightweight clients (ESP32 displays).
+Here you can find clients for [Remote WebView Server](https://github.com/strange-v/RemoteWebViewServer) — a headless browser that renders target web pages (e.g., Home Assistant dashboards) and streams them as image tiles over WebSocket to lightweight clients (ESP32 displays).
 
 ## ESPHome component
 
