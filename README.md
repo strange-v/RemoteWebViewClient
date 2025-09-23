@@ -173,6 +173,12 @@ remote_webview:
 | `jpeg_quality`          | int       | ❌       | `85`                              | JPEG quality hint for the server’s encoder. |
 | `max_bytes_per_msg`     | int (B)   | ❌       | `14336` or `61440`                | Upper bound for a single WS binary message. |
 
+## Recommendations
+- **full_frame_tile_count** set to 1 is the most efficient way to do a full-screen update; use it if your network/device memory allows it.
+- **every_nth_frame** must be 1 if you don’t want to miss changes (though increasing it may reduce server load). I recommend keeping it set to 1.
+- **min_frame_interval** should be slightly larger than the render time reported by the self-test (set `self-test` as a url parameter in the YAML).
+- **max_bytes_per_msg** should be larger than your maximum tile size (full-frame or partial).
+
 ## Standalone clients
 
 Arduino and ESP-IDF clients are deprecated for now. They were used during the PoC/development phase, but I don’t like the idea of supporting multiple codebases for the same project (not everything can be reused as-is due to different ESP-IDF versions, tooling, etc.). However, if demand for a standalone client is high, I may release one.
