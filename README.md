@@ -147,11 +147,30 @@ light:
     restore_mode: ALWAYS_ON
 
 remote_webview:
+  id: rwv
   display_id: my_display
   touchscreen_id: my_touchscreen
+  device_id: esp32-4848s040-t1
   server: 172.16.0.252:8081
   url: http://172.16.0.252:8123/dashboard-mobile/0
+  full_frame_tile_count: 1
   max_bytes_per_msg: 61440
+  jpeg_quality: 85
+
+text:
+  - platform: template
+    id: rwv_url
+    name: "URL"
+    optimistic: true
+    restore_value: false
+    mode: TEXT
+    min_length: 1
+    set_action:
+      - lambda: |-
+          if (!id(rwv).open_url(std::string(x.c_str()))) {
+            id(rwv).set_url(std::string(x.c_str()));
+            ESP_LOGI("remote_webview", "URL queued (not connected): %s", x.c_str());
+          }
 
 ```
 
