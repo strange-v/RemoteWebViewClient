@@ -67,6 +67,13 @@ struct RWV_PACKED FrameStatsPacket {
 };
 static_assert(sizeof(FrameStatsPacket) == 10, "FrameStatsPacket wire size must be 10");
 
+// [type:1][ver:1] => 2 bytes
+struct RWV_PACKED KeepalivePacket {
+  MsgType type;
+  uint8_t ver;
+};
+static_assert(sizeof(KeepalivePacket) == 2, "KeepalivePacket wire size must be 2");
+
 #if !defined(__GNUC__)
   #pragma pack(pop)
 #endif
@@ -157,6 +164,15 @@ inline size_t build_frame_stats_packet(uint32_t avg_time, uint32_t bytes, uint8_
   pkt.avg_time = avg_time;
   pkt.bytes = bytes;
 
+  memcpy(out, &pkt, sizeof(pkt));
+  return sizeof(pkt);
+}
+
+inline size_t build_keepalive_packet(uint8_t *out) {
+  if (!out) return 0;
+  KeepalivePacket pkt{};
+  pkt.type = MsgType::Keepalive;
+  pkt.ver  = kProtocolVersion;
   memcpy(out, &pkt, sizeof(pkt));
   return sizeof(pkt);
 }
