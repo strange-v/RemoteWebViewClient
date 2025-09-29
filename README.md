@@ -151,7 +151,7 @@ remote_webview:
   touchscreen_id: my_touchscreen
   device_id: esp32-4848s040-t1
   server: 172.16.0.252:8081
-  url: http://172.16.0.252:8123/dashboard-mobile/0
+  url: http://172.16.0.252:8123/dashboard-mobile/0  # set url: "self-test" to initiate the self-test
   full_frame_tile_count: 1
   max_bytes_per_msg: 61440
   jpeg_quality: 85
