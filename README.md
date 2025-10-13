@@ -13,6 +13,7 @@ The latest version of the client is implemented as an ESPHome external component
 ### Configuration example (Guition-ESP32-S3-4848S040)
 
 - Add your credentials to secrets.yaml
+![ESPHome Builder](/images/picture-002.png)
 - Change the substitutions according to your needs.
 
 ```yaml
