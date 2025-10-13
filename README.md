@@ -12,10 +12,20 @@ The latest version of the client is implemented as an ESPHome external component
 
 ### Configuration example (Guition-ESP32-S3-4848S040)
 
+- Add your credentials to secrets.yaml
+- Change the substitutions according to your needs.
+
 ```yaml
+substitutions:
+  name: esp32-4848s040          # choose your name
+  number: 1                     # number of the display
+  friendly_name: ESP32-Display Kitchen 
+  haip: homeassistant.local     # your Home Assistant url or IP
+  starturl: https://github.com  # set url: "self-test" to initiate the self-test
+
 esphome:
-  name: esp32-4848s040-t1
-  friendly_name: ESP32-4848S040-T1
+  name: ${name}-${number}
+  friendly_name:  ${friendly_name}
   platformio_options:
     board_build.flash_mode: dio
 
@@ -54,15 +64,19 @@ logger:
 
 api:
   encryption:
-    key: "XXXXXXXXX"
+    key: !secret api_encryption_key
 
 ota:
   - platform: esphome
-    password: "XXXXXXXXX"
+    password: !secret ota_password
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Display Fallback Hotspot"
+    password: ""
 
 captive_portal:
     
@@ -77,7 +91,7 @@ i2c:
 
 display:
   - platform: st7701s
-    id: my_display
+    id: espdisplay_${number}
     show_test_card: False
     update_interval: never
     auto_clear_enabled: False
@@ -132,8 +146,8 @@ touchscreen:
     mirror_x: false
     mirror_y: false
   i2c_id: bus_a
-  id: my_touchscreen
-  display: my_display
+  id: esptouchscreen_${number}
+  display: espdisplay_${number}
 
 output:
   - platform: ledc
@@ -149,11 +163,11 @@ light:
 
 remote_webview:
   id: rwv
-  display_id: my_display
-  touchscreen_id: my_touchscreen
-  device_id: esp32-4848s040-t1
-  server: 172.16.0.252:8081
-  url: http://172.16.0.252:8123/dashboard-mobile/0  # set url: "self-test" to initiate the self-test
+  display_id: espdisplay_${number}
+  touchscreen_id: esptouchscreen_${number}
+  device_id: ${name}
+  server: ${haip}:8081
+  url: ${starturl}
   full_frame_tile_count: 1
   max_bytes_per_msg: 61440
   jpeg_quality: 85
