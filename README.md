@@ -149,6 +149,11 @@ touchscreen:
   i2c_id: bus_a
   id: esptouchscreen_${number}
   display: espdisplay_${number}
+  on_touch:
+    then:
+      - light.turn_on: 
+          id: back_light
+          brightness: 1.0
 
 output:
   - platform: ledc
