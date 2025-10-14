@@ -13,13 +13,13 @@ The latest version of the client is implemented as an ESPHome external component
 ### Configuration example (Guition-ESP32-S3-4848S040)
 
 - Add your credentials to secrets.yaml
-![ESPHome Builder](/images/picture-002.png)
+![ESPHome Builder](/images/image-002.jpg)
 - Change the substitutions according to your needs.
 
 ```yaml
 substitutions:
-  name: esp32-4848s040          # choose your name
-  number: 1                     # number of the display
+  name: esp32-4848s040          # name of the display
+  number: 1                     # consecutive number of the display
   friendly_name: ESP32-Display Kitchen 
   haip: homeassistant.local     # your Home Assistant url or IP
   starturl: https://github.com  # set url: "self-test" to initiate the self-test
