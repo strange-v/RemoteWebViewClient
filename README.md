@@ -21,7 +21,7 @@ substitutions:
   name: esp32-4848s040          # name of the display
   number: 1                     # consecutive number of the display
   friendly_name: ESP32-Display Kitchen 
-  haip: homeassistant.local     # your Home Assistant url or IP
+  haip: homeassistant     # your Home Assistant url or IP
   starturl: https://github.com  # set url: "self-test" to initiate the self-test
 
 esphome:
