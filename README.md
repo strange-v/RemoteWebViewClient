@@ -18,13 +18,14 @@ The latest version of the client is implemented as an ESPHome external component
 
 ```yaml
 substitutions:
-  name: esp32-4848s040          # name of the display
-  number: 1                     # consecutive number of the display
+  name: esp32-4848s040          # Name of the display
+  number: 1                     # Consecutive number of the display
   friendly_name: ESP32-Display Kitchen 
-  haip: homeassistant           # your Home Assistant url or IP
-  starturl: https://github.com  # set url: "self-test" to initiate the self-test
-  delay: 5min                   # time till displaybacklight turns off
+  haip: homeassistant           # Your Home Assistant url or IP
+  starturl: https://github.com  # Set url: "self-test" to initiate the self-test
+  delay: 5min                   # Time till displaybacklight turns off. Possible: s/min/h
                                 # If you want the display to stay always on, just delete the code in the two marked blocks below.
+                                # Or just comment all lines out with # at the beginning of the line.
 
 esphome:
   name: ${name}-${number}
@@ -153,6 +154,7 @@ touchscreen:
   id: esptouchscreen_${number}
   display: espdisplay_${number}
 # begin remove for always one
+# vvvvvvvvvvvvvvvvvvvvvvvvvvv
   on_touch:
     then:
       - light.turn_on:
@@ -165,6 +167,7 @@ script:
     then:
       - delay: ${delay}
       - light.turn_off: back_light
+# ^^^^^^^^^^^^^^^^^^^^^^^^^
 # end remove for always one
 
 output:
@@ -179,9 +182,11 @@ light:
     id: back_light
     restore_mode: ALWAYS_ON
 # begin remove for always one
+# vvvvvvvvvvvvvvvvvvvvvvvvvvv
     on_turn_on:
       then:
         - script.execute: reset_backlight_timer
+# ^^^^^^^^^^^^^^^^^^^^^^^^^
 # end remove for always one
 
 remote_webview:
