@@ -21,14 +21,18 @@ substitutions:
   name: esp32-4848s040          # name of the display
   number: 1                     # consecutive number of the display
   friendly_name: ESP32-Display Kitchen 
-  haip: homeassistant     # your Home Assistant url or IP
+  haip: homeassistant           # your Home Assistant url or IP
   starturl: https://github.com  # set url: "self-test" to initiate the self-test
+  delay: 5min                   # time till displaybacklight turns off
 
 esphome:
   name: ${name}-${number}
   friendly_name:  ${friendly_name}
   platformio_options:
     board_build.flash_mode: dio
+    board_build.flash_mode: dio
+  on_boot:
+    - script.execute: reset_backlight_timer
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -151,9 +155,17 @@ touchscreen:
   display: espdisplay_${number}
   on_touch:
     then:
+      - script.execute: reset_backlight_timer
       - light.turn_on: 
           id: back_light
           brightness: 1.0
+
+script:
+  - id: reset_backlight_timer
+    mode: restart
+    then:
+      - delay: ${delay}
+      - light.turn_off: back_light
 
 output:
   - platform: ledc
