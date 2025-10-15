@@ -24,6 +24,7 @@ substitutions:
   haip: homeassistant           # your Home Assistant url or IP
   starturl: https://github.com  # set url: "self-test" to initiate the self-test
   delay: 5min                   # time till displaybacklight turns off
+                                # If you want the display to stay always on, just delete the code in the two marked blocks below.
 
 esphome:
   name: ${name}-${number}
@@ -31,8 +32,6 @@ esphome:
   platformio_options:
     board_build.flash_mode: dio
     board_build.flash_mode: dio
-  on_boot:
-    - script.execute: reset_backlight_timer
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -153,10 +152,10 @@ touchscreen:
   i2c_id: bus_a
   id: esptouchscreen_${number}
   display: espdisplay_${number}
+# begin remove for always one
   on_touch:
     then:
-      - script.execute: reset_backlight_timer
-      - light.turn_on: 
+      - light.turn_on:
           id: back_light
           brightness: 1.0
 
@@ -166,6 +165,7 @@ script:
     then:
       - delay: ${delay}
       - light.turn_off: back_light
+# end remove for always one
 
 output:
   - platform: ledc
@@ -178,6 +178,11 @@ light:
     name: "Display Backlight"
     id: back_light
     restore_mode: ALWAYS_ON
+# begin remove for always one
+    on_turn_on:
+      then:
+        - script.execute: reset_backlight_timer
+# end remove for always one
 
 remote_webview:
   id: rwv
