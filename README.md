@@ -24,9 +24,7 @@ substitutions:
   haip: homeassistant           # Your Home Assistant url or IP
   starturl: https://github.com  # Set url: "self-test" to initiate the self-test
   delay: 5min                   # Time till displaybacklight turns off. Possible: s/min/h
-                                # If you want the display to stay always on, just delete the code in the two marked blocks below.
-                                # Or just comment all lines out with # at the beginning of the line.
-
+                                # If you want the display to stay always on, use the alwayson.yaml example
 esphome:
   name: ${name}-${number}
   friendly_name:  ${friendly_name}
@@ -78,7 +76,6 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
     ssid: "Display Fallback Hotspot"
     password: ""
@@ -153,8 +150,6 @@ touchscreen:
   i2c_id: bus_a
   id: esptouchscreen_${number}
   display: espdisplay_${number}
-# begin remove for always one
-# vvvvvvvvvvvvvvvvvvvvvvvvvvv
   on_touch:
     then:
       - light.turn_on:
@@ -167,8 +162,6 @@ script:
     then:
       - delay: ${delay}
       - light.turn_off: back_light
-# ^^^^^^^^^^^^^^^^^^^^^^^^^
-# end remove for always one
 
 output:
   - platform: ledc
@@ -181,13 +174,9 @@ light:
     name: "Display Backlight"
     id: back_light
     restore_mode: ALWAYS_ON
-# begin remove for always one
-# vvvvvvvvvvvvvvvvvvvvvvvvvvv
     on_turn_on:
       then:
         - script.execute: reset_backlight_timer
-# ^^^^^^^^^^^^^^^^^^^^^^^^^
-# end remove for always one
 
 remote_webview:
   id: rwv
@@ -217,8 +206,17 @@ text:
 
 ```
 
-### Supported Parameters
+### Variables to change 
+| YAML variable    | Example            | Description  |
+|------------------|--------------------|--------------|
+| name             | esp32-4848s040     | Name of the display |
+| number           | 1                  | Consecutive number of the display |
+| friendly_name    | ESP32-Display Kitchen | Name in HA |
+| haip             | homeassistant       | Your Home Assistant url or IP |
+| starturl         | https://github.com  | Set url: "self-test" to initiate the self-test
+| delay            | 5min                | Time till displaybacklight turns off. Possible: s/min/h
 
+### Supported Parameters
 | YAML key                | Type      | Required | Example                          | Description |
 |-------------------------|-----------|:--------:|----------------------------------|-------------|
 | `display_id`            | id        | ✅       | `panel`                           | Display to draw on. |
