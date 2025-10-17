@@ -213,8 +213,8 @@ text:
 | number           | 1                  | Consecutive number of the display |
 | friendly_name    | ESP32-Display Kitchen | Name in HA |
 | haip             | homeassistant       | Your Home Assistant url or IP |
-| starturl         | https://github.com  | Set url: "self-test" to initiate the self-test
-| delay            | 5min                | Time till displaybacklight turns off. Possible: s/min/h
+| starturl         | https://github.com  | Set the "Homepage" of the display. Change according your needs. It wcould be something like: http://homeassistant:8123/config/dashboard |
+| delay            | 5min                | Time till displaybacklight turns off. Possible: s/min/h |
 
 ### Supported Parameters
 | YAML key                | Type      | Required | Example                          | Description |

@@ -1,10 +1,10 @@
 substitutions:
-  name: esp32-4848s040          # Name of the display
-  number: 1                     # Consecutive number of the display
-  friendly_name: ESP32-Display Kitchen 
-  haip: homeassistant           # Your Home Assistant url or IP
-  starturl: https://github.com  # Set url: "self-test" to initiate the self-test
-  delay: 5min                   # Time till displaybacklight turns off. Possible: s/min/h
+  name: esp32-4848s040                                  # Name of the display
+  number: 1                                             # Consecutive number of the display
+  friendly_name: ESP32-Display Kitchen                  # Name in HA
+  haip: homeassistant                                   # Your Home Assistant url or IP
+  starturl: http://homeassistant:8123/config/dashboard  # Set url: "self-test" to initiate the self-test
+  delay: 5min                                           # Time till displaybacklight turns off. Possible: s/min/h
 
 esphome:
   name: ${name}-${number}
