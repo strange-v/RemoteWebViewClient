@@ -15,6 +15,7 @@ CONF_EVERY_NTH_FRAME = "every_nth_frame"
 CONF_MIN_FRAME_INTERVAL = "min_frame_interval"
 CONF_JPEG_QUALITY = "jpeg_quality"
 CONF_MAX_BYTES_PER_MSG = "max_bytes_per_msg"
+CONF_BIG_ENDIAN = "big_endian"
 
 _SERVER_RE = re.compile(
     r"^(?P<host>[A-Za-z0-9](?:[A-Za-z0-9\-\.]*[A-Za-z0-9])?)\:(?P<port>\d{1,5})$"
@@ -57,6 +58,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_MIN_FRAME_INTERVAL): cv.int_,
         cv.Optional(CONF_JPEG_QUALITY): cv.int_,
         cv.Optional(CONF_MAX_BYTES_PER_MSG): cv.int_,
+        cv.Optional(CONF_BIG_ENDIAN): cv.boolean,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -90,6 +92,8 @@ async def to_code(config):
         cg.add(var.set_jpeg_quality(config[CONF_JPEG_QUALITY]))
     if CONF_MAX_BYTES_PER_MSG in config:
         cg.add(var.set_max_bytes_per_msg(config[CONF_MAX_BYTES_PER_MSG]))
+    if CONF_BIG_ENDIAN in config:
+        cg.add(var.set_big_endian(config[CONF_BIG_ENDIAN]))
 
 
     await cg.register_component(var, config)

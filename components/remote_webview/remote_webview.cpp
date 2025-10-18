@@ -311,7 +311,7 @@ bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const
   }
 
   jd_.setMaxOutputSize(4 * 2048);
-  jd_.setPixelType(RGB565_BIG_ENDIAN);
+  jd_.setPixelType(rgb565_big_endian_ ? RGB565_BIG_ENDIAN : RGB565_LITTLE_ENDIAN);
 
   const int rc = jd_.decode(dst_x, dst_y, 0);
   if (rc == 0) {
@@ -339,12 +339,13 @@ int RemoteWebView::jpeg_draw_cb_(JPEGDRAW *p) {
   if (y + h > FB_H) h = FB_H - y;
   if (w <= 0 || h <= 0) return 1;
 
+  const bool big_endian = rgb565_big_endian_;
   display_->draw_pixels_at(
       x, y, w, h,
       (const uint8_t *)p->pPixels,
       esphome::display::COLOR_ORDER_RGB,
       esphome::display::COLOR_BITNESS_565,
-      true
+      big_endian
   );
 
   return 1;
