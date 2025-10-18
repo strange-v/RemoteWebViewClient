@@ -30,6 +30,7 @@ class RemoteWebView : public Component {
   void set_min_frame_interval(int v) { min_frame_interval_ = v; }
   void set_jpeg_quality(int v) { jpeg_quality_ = v; }
   void set_max_bytes_per_msg(int v) { max_bytes_per_msg_ = v; }
+  void set_big_endian(bool v) { rgb565_big_endian_ = v; }
   bool open_url(const std::string &s);
 
   void setup() override;
@@ -68,6 +69,7 @@ class RemoteWebView : public Component {
   int min_frame_interval_{-1};
   int jpeg_quality_{-1};
   int max_bytes_per_msg_{-1};
+  bool rgb565_big_endian_{true};
 
   uint64_t last_move_us_{0};
   uint64_t last_keepalive_us_{0};
