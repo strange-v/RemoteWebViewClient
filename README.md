@@ -192,7 +192,7 @@ text:
 | `min_frame_interval`    | int (ms)  | ❌       | `80`                              | Minimum time between frames on the wire, in milliseconds. |
 | `jpeg_quality`          | int       | ❌       | `85`                              | JPEG quality hint for the server’s encoder. |
 | `max_bytes_per_msg`     | int (B)   | ❌       | `14336` or `61440`                | Upper bound for a single WS binary message. |
-| `big_endian`            | bool      | ❌       | `true` or `false`                 | Use big-endian RGB565 pixel order for JPEG output (set false for little-endian panels). |
+| `big_endian`            | bool      | ❌       | `true` or `false`                 | Use big-endian RGB565 pixel order for JPEG output (set false for little-endian panels). Default is `true`|
 
 ## Recommendations
 - **full_frame_tile_count** set to 1 is the most efficient way to do a full-screen update; use it if your network/device memory allows it.
