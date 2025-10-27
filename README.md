@@ -12,11 +12,24 @@ The latest version of the client is implemented as an ESPHome external component
 
 ### Configuration example (Guition-ESP32-S3-4848S040)
 
+- Add your credentials to secrets.yaml
+![ESPHome Builder](/images/image-002.jpg)
+- Change the substitutions according to your needs.
+
 ```yaml
+substitutions:
+  name: esp32-4848s040          # Name of the display
+  number: 1                     # Consecutive number of the display
+  friendly_name: ESP32-Display Kitchen 
+  haip: homeassistant           # Your Home Assistant url or IP
+  starturl: https://github.com  # Set url: "self-test" to initiate the self-test
+  delay: 5min                   # Time till displaybacklight turns off. Possible: s/min/h
+                                # If you want the display to stay always on, use the alwayson.yaml example
 esphome:
-  name: esp32-4848s040-t1
-  friendly_name: ESP32-4848S040-T1
+  name: ${name}-${number}
+  friendly_name:  ${friendly_name}
   platformio_options:
+    board_build.flash_mode: dio
     board_build.flash_mode: dio
 
 esp32:
@@ -54,15 +67,18 @@ logger:
 
 api:
   encryption:
-    key: "XXXXXXXXX"
+    key: !secret api_encryption_key
 
 ota:
   - platform: esphome
-    password: "XXXXXXXXX"
+    password: !secret ota_password
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  ap:
+    ssid: "Display Fallback Hotspot"
+    password: ""
 
 captive_portal:
     
@@ -77,7 +93,7 @@ i2c:
 
 display:
   - platform: st7701s
-    id: my_display
+    id: espdisplay_${number}
     show_test_card: False
     update_interval: never
     auto_clear_enabled: False
@@ -132,8 +148,20 @@ touchscreen:
     mirror_x: false
     mirror_y: false
   i2c_id: bus_a
-  id: my_touchscreen
-  display: my_display
+  id: esptouchscreen_${number}
+  display: espdisplay_${number}
+  on_touch:
+    then:
+      - light.turn_on:
+          id: back_light
+          brightness: 1.0
+
+script:
+  - id: reset_backlight_timer
+    mode: restart
+    then:
+      - delay: ${delay}
+      - light.turn_off: back_light
 
 output:
   - platform: ledc
@@ -146,14 +174,17 @@ light:
     name: "Display Backlight"
     id: back_light
     restore_mode: ALWAYS_ON
+    on_turn_on:
+      then:
+        - script.execute: reset_backlight_timer
 
 remote_webview:
   id: rwv
-  display_id: my_display
-  touchscreen_id: my_touchscreen
-  device_id: esp32-4848s040-t1
-  server: 172.16.0.252:8081
-  url: http://172.16.0.252:8123/dashboard-mobile/0  # set url: "self-test" to initiate the self-test
+  display_id: espdisplay_${number}
+  touchscreen_id: esptouchscreen_${number}
+  device_id: ${name}
+  server: ${haip}:8081
+  url: ${starturl}
   full_frame_tile_count: 1
   max_bytes_per_msg: 61440
   jpeg_quality: 85
@@ -175,8 +206,17 @@ text:
 
 ```
 
-### Supported Parameters
+### Variables to change 
+| YAML variable    | Example            | Description  |
+|------------------|--------------------|--------------|
+| name             | esp32-4848s040     | Name of the display |
+| number           | 1                  | Consecutive number of the display |
+| friendly_name    | ESP32-Display Kitchen | Name in HA |
+| haip             | homeassistant       | Your Home Assistant url or IP |
+| starturl         | https://github.com  | Set the "Homepage" of the display. Change according your needs. It wcould be something like: http://homeassistant:8123/config/dashboard |
+| delay            | 5min                | Time till displaybacklight turns off. Possible: s/min/h |
 
+### Supported Parameters
 | YAML key                | Type      | Required | Example                          | Description |
 |-------------------------|-----------|:--------:|----------------------------------|-------------|
 | `display_id`            | id        | ✅       | `panel`                           | Display to draw on. |
