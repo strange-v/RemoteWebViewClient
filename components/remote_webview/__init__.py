@@ -44,11 +44,11 @@ RemoteWebView = ns.class_("RemoteWebView", cg.Component)
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(RemoteWebView),
-        cv.Required(CONF_DISPLAY_ID): cv.use_id(display.Display),
+        cv.GenerateID(CONF_DISPLAY_ID): cv.use_id(display.Display),
+        cv.GenerateID(CONF_TOUCHSCREEN_ID): cv.use_id(touchscreen.Touchscreen),
         cv.Required(CONF_SERVER): validate_host_port,
         cv.Required(CONF_URL): cv.string,
 
-        cv.Optional(CONF_TOUCHSCREEN_ID): cv.use_id(touchscreen.Touchscreen),
         cv.Optional(CONF_DEVICE_ID): cv.string,
         cv.Optional(CONF_TILE_SIZE): cv.int_,
         cv.Optional(CONF_FULL_FRAME_TILE_COUNT): cv.int_,

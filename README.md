@@ -77,7 +77,6 @@ i2c:
 
 display:
   - platform: st7701s
-    id: my_display
     show_test_card: False
     update_interval: never
     auto_clear_enabled: False
@@ -132,8 +131,6 @@ touchscreen:
     mirror_x: false
     mirror_y: false
   i2c_id: bus_a
-  id: my_touchscreen
-  display: my_display
 
 output:
   - platform: ledc
@@ -149,9 +146,6 @@ light:
 
 remote_webview:
   id: rwv
-  display_id: my_display
-  touchscreen_id: my_touchscreen
-  device_id: esp32-4848s040-t1
   server: 172.16.0.252:8081
   url: http://172.16.0.252:8123/dashboard-mobile/0  # set url: "self-test" to initiate the self-test
   full_frame_tile_count: 1
