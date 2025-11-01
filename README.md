@@ -173,8 +173,8 @@ text:
 
 | YAML key                | Type      | Required | Example                          | Description |
 |-------------------------|-----------|:--------:|----------------------------------|-------------|
-| `display_id`            | id        | ✅       | `panel`                           | Display to draw on. |
-| `touchscreen_id`        | id        | ❌       | `touch`                           | Optional touch input source. When present, touch events (down/move/up) are sent to the server. |
+| `display_id`            | id        | ❌       | `panel`                           | Display to draw on. Optional, if only one display is defined in the YAML.|
+| `touchscreen_id`        | id        | ❌       | `touch`                           | Touch input source. Optional, if only one touchscreen is defined in the YAML. |
 | `server`                | string    | ✅       | `172.16.0.252:8081`              | WebSocket server address. Must be `hostname_or_IP:port`. |
 | `url`                   | string    | ✅       | `http://…/dashboard`             | Page to open on connect. |
 | `device_id`             | string    | ❌       | `"my-device"` or auto (`esp32-<mac>`) | Identifier used by the server. If not set, the component derives `esp32-<mac>` from the chip MAC and still sends it. |
