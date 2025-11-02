@@ -527,6 +527,7 @@ std::string RemoteWebView::build_ws_uri_() const {
   append_q_int_(uri, "w", W);
   append_q_int_(uri, "h", H);
 
+  append_q_int_(uri,   "r",    rotation_);
   append_q_int_(uri,   "ts",   tile_size_);
   append_q_int_(uri,   "fftc", full_frame_tile_count_);
   append_q_float_(uri, "ffat", full_frame_area_threshold_);

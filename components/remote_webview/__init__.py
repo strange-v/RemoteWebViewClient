@@ -2,7 +2,9 @@ import re
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import display, touchscreen
-from esphome.const import CONF_ID, CONF_DISPLAY_ID, CONF_URL
+from esphome.components.display import validate_rotation
+from esphome.const import CONF_ID, CONF_DISPLAY_ID, CONF_URL, CONF_ROTATION
+
 
 CONF_DEVICE_ID = "device_id"
 CONF_TOUCHSCREEN_ID = "touchscreen_id"
@@ -59,6 +61,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_JPEG_QUALITY): cv.int_,
         cv.Optional(CONF_MAX_BYTES_PER_MSG): cv.int_,
         cv.Optional(CONF_BIG_ENDIAN): cv.boolean,
+        cv.Optional(CONF_ROTATION): validate_rotation,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -94,6 +97,8 @@ async def to_code(config):
         cg.add(var.set_max_bytes_per_msg(config[CONF_MAX_BYTES_PER_MSG]))
     if CONF_BIG_ENDIAN in config:
         cg.add(var.set_big_endian(config[CONF_BIG_ENDIAN]))
+    if CONF_ROTATION in config:
+        cg.add(var.set_rotation(config[CONF_ROTATION]))
 
 
     await cg.register_component(var, config)
