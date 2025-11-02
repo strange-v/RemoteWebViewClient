@@ -186,9 +186,11 @@ text:
 | `min_frame_interval`    | int (ms)  | ❌       | `80`                              | Minimum time between frames on the wire, in milliseconds. |
 | `jpeg_quality`          | int       | ❌       | `85`                              | JPEG quality hint for the server’s encoder. |
 | `max_bytes_per_msg`     | int (B)   | ❌       | `14336` or `61440`                | Upper bound for a single WS binary message. |
-| `big_endian`            | bool      | ❌       | `true` or `false`                 | Use big-endian RGB565 pixel order for JPEG output (set false for little-endian panels). Default is `true`|
+| `big_endian`            | bool      | ❌       | `true` or `false`                 | Use big-endian RGB565 pixel order for JPEG output (set false for little-endian panels). Default is `true`. |
+| `rotation`              | int       | ❌       | 0, 90, 180, 270                   | Enables software rotation for both the display and touchscreen. |
 
 ## Recommendations
+
 - **full_frame_tile_count** set to 1 is the most efficient way to do a full-screen update; use it if your network/device memory allows it.
 - **every_nth_frame** must be 1 if you don’t want to miss changes (though increasing it may reduce server load). I recommend keeping it set to 1.
 - **min_frame_interval** should be slightly larger than the render time reported by the self-test (set `self-test` as a url parameter in the YAML).
