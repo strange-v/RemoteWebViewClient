@@ -31,7 +31,7 @@ class RemoteWebView : public Component {
   void set_jpeg_quality(int v) { jpeg_quality_ = v; }
   void set_max_bytes_per_msg(int v) { max_bytes_per_msg_ = v; }
   void set_big_endian(bool v) { rgb565_big_endian_ = v; }
-  void set_rotation(bool v) { rotation_ = v; }
+  void set_rotation(int v) { rotation_ = v; }
   bool open_url(const std::string &s);
 
   void setup() override;
