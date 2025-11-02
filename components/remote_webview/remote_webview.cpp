@@ -67,6 +67,8 @@ void RemoteWebView::dump_config() {
   print_opt_int   ("min_frame_interval",        min_frame_interval_);
   print_opt_int   ("jpeg_quality",              jpeg_quality_);
   print_opt_int   ("max_bytes_per_msg",         max_bytes_per_msg_);
+  print_opt_int   ("big_endian",                rgb565_big_endian_);
+  print_opt_int   ("rotation",                  rotation_);
 }
 
 bool RemoteWebView::open_url(const std::string &s) {
