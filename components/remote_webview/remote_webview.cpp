@@ -37,6 +37,15 @@ void RemoteWebView::setup() {
     touch_->register_listener(touch_listener_);
     ESP_LOGI(TAG, "touch listener registered");
   }
+
+#if REMOTE_WEBVIEW_HW_JPEG
+  jpeg_decode_engine_cfg_t jcfg = {
+    .timeout_ms = 200,
+  };
+  if (jpeg_new_decoder_engine(&jcfg, &hw_dec_) != ESP_OK) {
+    hw_dec_ = nullptr;
+  }
+#endif
 }
 
 void RemoteWebView::dump_config() {
@@ -305,8 +314,82 @@ void RemoteWebView::process_frame_stats_packet_(const uint8_t *data, size_t len)
 }
 
 bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len) {
-  if (!display_ || !data || len == 0) return false;
+  if (!display_ || !data || !len) return false;
 
+#if REMOTE_WEBVIEW_HW_JPEG
+  if (hw_dec_) {
+    jpeg_decode_picture_info_t hdr{};
+    if (jpeg_decoder_get_info(data, (uint32_t)len, &hdr) != ESP_OK || !hdr.width || !hdr.height) {
+      return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
+    }
+
+    const int aligned_w = (hdr.width  + 15) & ~15;
+    const int aligned_h = (hdr.height + 15) & ~15;
+    const uint32_t out_sz = (uint32_t)aligned_w * (uint32_t)aligned_h * 2u;
+
+    if (aligned_w != (int)hdr.width) {
+      ESP_LOGW(TAG, "jpeg dimensions not aligned: %u x %u", (unsigned)hdr.width, (unsigned)hdr.height);
+      return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
+    }
+
+    jpeg_decode_cfg_t jcfg{};
+    jcfg.output_format = JPEG_DECODE_OUT_FORMAT_RGB565;
+    jcfg.rgb_order     = JPEG_DEC_RGB_ELEMENT_ORDER_BGR;     // fixes R/B swap
+    jcfg.conv_std      = JPEG_YUV_RGB_CONV_STD_BT601;
+    
+    size_t in_real = 0, out_real = 0;
+    jpeg_decode_memory_alloc_cfg_t in_cfg  { .buffer_direction = JPEG_DEC_ALLOC_INPUT_BUFFER  };
+    jpeg_decode_memory_alloc_cfg_t out_cfg { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
+
+    uint8_t *bit_stream = (uint8_t*) jpeg_alloc_decoder_mem((uint32_t)len,    &in_cfg,  &in_real);
+    uint8_t *out_al     = (uint8_t*) jpeg_alloc_decoder_mem((uint32_t)out_sz, &out_cfg, &out_real);
+
+    if (!bit_stream || in_real < len || !out_al || out_real < out_sz) {
+      if (bit_stream) free(bit_stream);
+      if (out_al)     free(out_al);
+      return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
+    }
+
+    memcpy(bit_stream, data, len);
+
+  #if REMOTE_WEBVIEW_HAS_CACHE_MSYNC
+    esp_cache_msync(bit_stream, (size_t)len, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+  #endif
+
+    uint32_t written = 0;
+    esp_err_t dr = jpeg_decoder_process(hw_dec_, &jcfg, bit_stream, (uint32_t)len, out_al, (uint32_t)out_sz, &written);
+
+  #if REMOTE_WEBVIEW_HAS_CACHE_MSYNC
+    esp_cache_msync(out_al, (size_t)out_sz, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+  #endif
+
+    free(bit_stream);
+
+    if (dr != ESP_OK) {
+      free(out_al);
+      return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
+    }
+
+    const size_t tight_sz = (size_t)hdr.width * (size_t)hdr.height * 2u;
+
+#if REMOTE_WEBVIEW_HAS_CACHE_MSYNC
+    esp_cache_msync(out_al, tight_sz, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+#endif
+
+    display_->draw_pixels_at(dst_x, dst_y, (int)hdr.width, (int)hdr.height, out_al,
+        esphome::display::COLOR_ORDER_RGB,
+        esphome::display::COLOR_BITNESS_565,
+        rgb565_big_endian_);
+
+    free(out_al);
+    return true;
+  }
+#endif  // REMOTE_WEBVIEW_HW_JPEG
+
+  return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
+}
+
+bool RemoteWebView::decode_jpeg_tile_software_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len) {
   if (!jd_.openRAM((uint8_t*)data, (int)len, &RemoteWebView::jpeg_draw_cb_s_)) {
     ESP_LOGW(TAG, "openRAM failed (len=%u) err=%d", (unsigned)len, jd_.getLastError());
     return false;

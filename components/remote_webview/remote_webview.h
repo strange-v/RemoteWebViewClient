@@ -12,6 +12,19 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  #include "driver/jpeg_decode.h"
+  #define REMOTE_WEBVIEW_HW_JPEG 1
+#else
+  #define REMOTE_WEBVIEW_HW_JPEG 0
+#endif
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  #include "esp_cache.h"
+  #define REMOTE_WEBVIEW_HAS_CACHE_MSYNC 1
+#else
+  #define REMOTE_WEBVIEW_HAS_CACHE_MSYNC 0
+#endif
+
 namespace esphome {
 namespace remote_webview {
 
@@ -73,6 +86,10 @@ class RemoteWebView : public Component {
   bool rgb565_big_endian_{true};
   int rotation_{0};
 
+#if REMOTE_WEBVIEW_HW_JPEG
+  jpeg_decoder_handle_t hw_dec_{nullptr};
+#endif
+
   uint64_t last_move_us_{0};
   uint64_t last_keepalive_us_{0};
   
@@ -103,6 +120,7 @@ class RemoteWebView : public Component {
   void process_frame_packet_(const uint8_t *data, size_t len);
   void process_frame_stats_packet_(const uint8_t *data, size_t len);
   bool decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len);
+  bool decode_jpeg_tile_software_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len);
 
   static int jpeg_draw_cb_s_(JPEGDRAW *p);
   int jpeg_draw_cb_(JPEGDRAW *p);
