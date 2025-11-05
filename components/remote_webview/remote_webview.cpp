@@ -198,8 +198,11 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
 
       if (e->payload_offset == 0) {
         reasm_reset_(*r);
-        if ((size_t)e->payload_len > cfg::ws_max_message_bytes) {
-          ESP_LOGE(TAG, "WS message too large: %u > %u", (unsigned)e->payload_len, (unsigned)cfg::ws_max_message_bytes);
+        const size_t max_allowed = (self_ && self_->max_bytes_per_msg_ > 0) 
+                                   ? (size_t)self_->max_bytes_per_msg_ 
+                                   : cfg::ws_max_message_bytes;
+        if ((size_t)e->payload_len > max_allowed) {
+          ESP_LOGE(TAG, "WS message too large: %u > %u", (unsigned)e->payload_len, (unsigned)max_allowed);
           break;
         }
         r->total = (size_t)e->payload_len;
@@ -471,10 +474,10 @@ bool RemoteWebView::ws_send_open_url_(const char *url, uint16_t flags) {
 
   const uint32_t n = (uint32_t) strlen(url);
   const size_t total = sizeof(proto::OpenURLHeader) + (size_t) n;
-  if (total > cfg::ws_max_message_bytes) return false;
+  
+  if (total > 16 * 1024) return false;
 
-  // try PSRAM first
-  auto *pkt = (uint8_t *) heap_caps_malloc(total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    auto *pkt = (uint8_t *) heap_caps_malloc(total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!pkt) pkt = (uint8_t *) heap_caps_malloc(total, MALLOC_CAP_8BIT);
   if (!pkt) return false;
 
