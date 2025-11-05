@@ -88,6 +88,10 @@ class RemoteWebView : public Component {
 
 #if REMOTE_WEBVIEW_HW_JPEG
   jpeg_decoder_handle_t hw_dec_{nullptr};
+  uint8_t *hw_decode_input_buf_{nullptr};
+  uint8_t *hw_decode_output_buf_{nullptr};
+  size_t hw_decode_input_size_{0};
+  size_t hw_decode_output_size_{0};
 #endif
 
   uint64_t last_move_us_{0};
