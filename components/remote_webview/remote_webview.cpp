@@ -378,7 +378,7 @@ bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const
     jpeg_decode_cfg_t jcfg{};
     jcfg.output_format = JPEG_DECODE_OUT_FORMAT_RGB565;
     jcfg.rgb_order     = JPEG_DEC_RGB_ELEMENT_ORDER_BGR;
-    jcfg.conv_std      = JPEG_YUV_RGB_CONV_STD_BT601;
+    jcfg.conv_std      = JPEG_YUV_RGB_CONV_STD_BT709;
 
     memcpy(hw_decode_input_buf_, data, len);
     
