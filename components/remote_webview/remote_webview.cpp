@@ -9,13 +9,14 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "esp_websocket_client.h"
+#include "esp_efuse.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 namespace esphome {
 namespace remote_webview {
 
-static const char *const TAG = "Remove_WebView";
+static const char *const TAG = "Remote_WebView";
 RemoteWebView *RemoteWebView::self_ = nullptr;
 
 void RemoteWebView::setup() {
@@ -26,7 +27,7 @@ void RemoteWebView::setup() {
     return;
   }
 
-  q_decode_    = xQueueCreate(cfg::decode_queue_depth, sizeof(WsMsg));
+  q_decode_ = xQueueCreate(cfg::decode_queue_depth, sizeof(WsMsg));
   ws_send_mtx_ = xSemaphoreCreateMutex();
 
   start_decode_task_();
@@ -35,7 +36,7 @@ void RemoteWebView::setup() {
   if (touch_) {
     touch_listener_ = new RemoteWebViewTouchListener(this);
     touch_->register_listener(touch_listener_);
-    ESP_LOGI(TAG, "touch listener registered");
+    ESP_LOGD(TAG, "touch listener registered");
   }
 
 #if REMOTE_WEBVIEW_HW_JPEG
@@ -52,7 +53,6 @@ void RemoteWebView::setup() {
     const int aligned_w = (W + 15) & ~15;
     const int aligned_h = (H + 15) & ~15;
     
-    // Allocate same size for input and output - JPEG can't be larger than uncompressed RGB565
     const size_t max_buffer_size = (size_t)aligned_w * (size_t)aligned_h * 2u;
     
     jpeg_decode_memory_alloc_cfg_t in_cfg { .buffer_direction = JPEG_DEC_ALLOC_INPUT_BUFFER };
@@ -70,7 +70,7 @@ void RemoteWebView::setup() {
       jpeg_del_decoder_engine(hw_dec_);
       hw_dec_ = nullptr;
     } else {
-      ESP_LOGI(TAG, "HW decoder buffers allocated: input=%u, output=%u", 
+      ESP_LOGD(TAG, "HW decoder buffers allocated: input=%u, output=%u", 
                (unsigned)hw_decode_input_size_, (unsigned)hw_decode_output_size_);
     }
   }
@@ -86,6 +86,12 @@ void RemoteWebView::dump_config() {
   if (display_) {
     ESP_LOGCONFIG(TAG, "  display: %dx%d", display_->get_width(), display_->get_height());
   }
+
+#if REMOTE_WEBVIEW_HW_JPEG
+  ESP_LOGCONFIG(TAG, "  hw_jpeg: %s", hw_dec_ ? "yes" : "no");
+#else
+  ESP_LOGCONFIG(TAG, "  hw_jpeg: no");
+#endif
 
   ESP_LOGCONFIG(TAG, "  server: %s:%d", server_host_.c_str(), server_port_);
   ESP_LOGCONFIG(TAG, "  url: %s", url_.c_str());
@@ -117,7 +123,7 @@ bool RemoteWebView::open_url(const std::string &s) {
   
   if (ws_send_open_url_(s.c_str(), 0)) {
     url_ = s;
-    ESP_LOGI(TAG, "opened URL: %s", s.c_str());
+    ESP_LOGD(TAG, "opened URL: %s", s.c_str());
     return true;
   }
   
@@ -183,7 +189,7 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
 
     case WEBSOCKET_EVENT_DISCONNECTED:
       if (self_) self_->ws_client_ = nullptr;
-      ESP_LOGW(TAG, "[ws] disconnected");
+      ESP_LOGI(TAG, "[ws] disconnected");
       if (self_) self_->last_keepalive_us_ = 0; 
       reasm_reset_(*r);
       break;
@@ -346,7 +352,7 @@ void RemoteWebView::process_frame_stats_packet_(const uint8_t *data, size_t len)
 }
 
 bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len) {
-  if (!display_ || !data || !len) return false;
+  if (!data || !len) return false;
 
 #if REMOTE_WEBVIEW_HW_JPEG
   if (hw_dec_ && hw_decode_input_buf_ && hw_decode_output_buf_) {
@@ -398,7 +404,7 @@ bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const
 
 bool RemoteWebView::decode_jpeg_tile_software_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len) {
   if (!jd_.openRAM((uint8_t*)data, (int)len, &RemoteWebView::jpeg_draw_cb_s_)) {
-    ESP_LOGW(TAG, "openRAM failed (len=%u) err=%d", (unsigned)len, jd_.getLastError());
+    ESP_LOGE(TAG, "openRAM failed (len=%u) err=%d", (unsigned)len, jd_.getLastError());
     return false;
   }
 
@@ -407,7 +413,7 @@ bool RemoteWebView::decode_jpeg_tile_software_(int16_t dst_x, int16_t dst_y, con
 
   const int rc = jd_.decode(dst_x, dst_y, 0);
   if (rc == 0) {
-    ESP_LOGW(TAG, "decode rc=%d err=%d", rc, jd_.getLastError());
+    ESP_LOGE(TAG, "decode rc=%d err=%d", rc, jd_.getLastError());
     jd_.close();
     return false;
   }
@@ -420,8 +426,6 @@ int RemoteWebView::jpeg_draw_cb_s_(JPEGDRAW *p) {
 }
 
 int RemoteWebView::jpeg_draw_cb_(JPEGDRAW *p) {
-  if (!display_) return 0;
-
   int32_t x = p->x, y = p->y, w = p->iWidth, h = p->iHeight;
   const int FB_W = display_->get_width();
   const int FB_H = display_->get_height();
@@ -447,7 +451,6 @@ bool RemoteWebView::ws_send_touch_event_(proto::TouchType type, int x, int y, ui
   if (!ws_client_ || !ws_send_mtx_ || !esp_websocket_client_is_connected(ws_client_))
     return false;
 
-  // clamp into 16-bit
   if (x < 0) x = 0; if (y < 0) y = 0;
   if (x > 65535) x = 65535; if (y > 65535) y = 65535;
 
@@ -585,20 +588,30 @@ std::string RemoteWebView::resolve_device_id_() const {
   if (!device_id_.empty()) return device_id_;
 
   uint8_t mac[6] = {0};
+  esp_err_t err = ESP_FAIL;
+  
 #if ESP_IDF_VERSION_MAJOR >= 5
-  if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
-    (void) esp_read_mac(mac, ESP_MAC_BT);  // best-effort fallback
+  err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  if (err != ESP_OK) {
+    err = esp_read_mac(mac, ESP_MAC_BT);
+  }
+  if (err != ESP_OK) {
+    err = esp_read_mac(mac, ESP_MAC_ETH);
+  }
+  if (err != ESP_OK) {
+    err = esp_efuse_mac_get_default(mac);
   }
 #else
-  // Older IDF: try to get base MAC from eFuse
-  // (some SDKs declare esp_efuse_mac_get_default in esp_system.h)
-  extern "C" esp_err_t esp_efuse_mac_get_default(uint8_t *mac);
-  if (esp_efuse_mac_get_default) {
-    (void) esp_efuse_mac_get_default(mac);
-  } else {
-    (void) esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  err = esp_efuse_mac_get_default(mac);
+  if (err != ESP_OK) {
+    err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
   }
 #endif
+
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "Failed to read MAC address, using random ID");
+    snprintf((char*)mac, sizeof(mac), "%06lx", (unsigned long)esp_random());
+  }
 
   char buf[32];
   snprintf(buf, sizeof(buf), "esp32-%02x%02x%02x%02x%02x%02x",
