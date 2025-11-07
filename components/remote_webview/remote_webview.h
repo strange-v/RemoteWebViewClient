@@ -2,7 +2,6 @@
 #include "esphome/core/component.h"
 #include "esphome/components/display/display.h"
 #include "esphome/components/touchscreen/touchscreen.h"
-#include "JPEGDEC.h"
 #include "protocol.h"
 #include "remote_webview_config.h"
 
@@ -12,17 +11,12 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-  #include "driver/jpeg_decode.h"
-  #define REMOTE_WEBVIEW_HW_JPEG 1
+#if __has_include("esp_jpeg_dec.h")
+  #include "esp_jpeg_dec.h"
+  #define REMOTE_WEBVIEW_HAS_ESP_JPEG 1
 #else
-  #define REMOTE_WEBVIEW_HW_JPEG 0
-#endif
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-  #include "esp_cache.h"
-  #define REMOTE_WEBVIEW_HAS_CACHE_MSYNC 1
-#else
-  #define REMOTE_WEBVIEW_HAS_CACHE_MSYNC 0
+  #error "esp_new_jpeg component is required. Add to your ESPHome config: framework.components: [{name: 'espressif/esp_new_jpeg'}]"
+  #define REMOTE_WEBVIEW_HAS_ESP_JPEG 0
 #endif
 
 namespace esphome {
@@ -51,6 +45,17 @@ class RemoteWebView : public Component {
   void loop() override {}
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::LATE; }
+  
+  ~RemoteWebView() {
+    if (jpeg_decode_buffer_) {
+      free(jpeg_decode_buffer_);
+      jpeg_decode_buffer_ = nullptr;
+    }
+    if (jpeg_dec_) {
+      jpeg_dec_close(jpeg_dec_);
+      jpeg_dec_ = nullptr;
+    }
+  }
 
  private:
   struct WsMsg {
@@ -86,13 +91,9 @@ class RemoteWebView : public Component {
   bool rgb565_big_endian_{true};
   int rotation_{0};
 
-#if REMOTE_WEBVIEW_HW_JPEG
-  jpeg_decoder_handle_t hw_dec_{nullptr};
-  uint8_t *hw_decode_input_buf_{nullptr};
-  uint8_t *hw_decode_output_buf_{nullptr};
-  size_t hw_decode_input_size_{0};
-  size_t hw_decode_output_size_{0};
-#endif
+  jpeg_dec_handle_t jpeg_dec_{nullptr};
+  uint8_t *jpeg_decode_buffer_{nullptr};
+  size_t jpeg_decode_buffer_size_{0};
 
   uint64_t last_move_us_{0};
   uint64_t last_keepalive_us_{0};
@@ -124,11 +125,6 @@ class RemoteWebView : public Component {
   void process_frame_packet_(const uint8_t *data, size_t len);
   void process_frame_stats_packet_(const uint8_t *data, size_t len);
   bool decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len);
-  bool decode_jpeg_tile_software_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len);
-
-  static int jpeg_draw_cb_s_(JPEGDRAW *p);
-  int jpeg_draw_cb_(JPEGDRAW *p);
-  JPEGDEC jd_;
 
   bool ws_send_touch_event_(proto::TouchType type, int x, int y, uint8_t pid);
   bool ws_send_keepalive_();

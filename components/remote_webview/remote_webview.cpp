@@ -30,6 +30,41 @@ void RemoteWebView::setup() {
   q_decode_ = xQueueCreate(cfg::decode_queue_depth, sizeof(WsMsg));
   ws_send_mtx_ = xSemaphoreCreateMutex();
 
+  jpeg_dec_config_t config = {
+    .output_type = rgb565_big_endian_ ? JPEG_PIXEL_FORMAT_RGB565_BE : JPEG_PIXEL_FORMAT_RGB565_LE,
+    .scale = {.width = 0, .height = 0},
+    .clipper = {.width = 0, .height = 0},
+    .rotate = JPEG_ROTATE_0D,
+    .block_enable = false,
+  };
+
+  jpeg_error_t ret = jpeg_dec_open(&config, &jpeg_dec_);
+  if (ret != JPEG_ERR_OK) {
+    ESP_LOGE(TAG, "Failed to open JPEG decoder: %d", ret);
+    jpeg_dec_ = nullptr;
+  } else {
+    const int W = display_->get_width();
+    const int H = display_->get_height();
+    jpeg_decode_buffer_size_ = (size_t)W * (size_t)H * 2u;
+    
+    jpeg_decode_buffer_ = (uint8_t*)heap_caps_aligned_alloc(16, jpeg_decode_buffer_size_, 
+                                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!jpeg_decode_buffer_) {
+      jpeg_decode_buffer_ = (uint8_t*)heap_caps_aligned_alloc(16, jpeg_decode_buffer_size_, 
+                                                               MALLOC_CAP_8BIT);
+    }
+    
+    if (!jpeg_decode_buffer_) {
+      ESP_LOGE(TAG, "Failed to allocate JPEG decode buffer: %u bytes", 
+               (unsigned)jpeg_decode_buffer_size_);
+      jpeg_dec_close(jpeg_dec_);
+      jpeg_dec_ = nullptr;
+    } else {
+      ESP_LOGD(TAG, "JPEG decoder initialized, buffer: %u bytes", 
+               (unsigned)jpeg_decode_buffer_size_);
+    }
+  }
+
   start_decode_task_();
   start_ws_task_();
 
@@ -38,43 +73,6 @@ void RemoteWebView::setup() {
     touch_->register_listener(touch_listener_);
     ESP_LOGD(TAG, "touch listener registered");
   }
-
-#if REMOTE_WEBVIEW_HW_JPEG
-  jpeg_decode_engine_cfg_t jcfg = {
-    .timeout_ms = 200,
-  };
-  if (jpeg_new_decoder_engine(&jcfg, &hw_dec_) != ESP_OK) {
-    hw_dec_ = nullptr;
-  }
-  
-  if (hw_dec_) {
-    const int W = display_->get_width();
-    const int H = display_->get_height();
-    const int aligned_w = (W + 15) & ~15;
-    const int aligned_h = (H + 15) & ~15;
-    
-    const size_t max_buffer_size = (size_t)aligned_w * (size_t)aligned_h * 2u;
-    
-    jpeg_decode_memory_alloc_cfg_t in_cfg { .buffer_direction = JPEG_DEC_ALLOC_INPUT_BUFFER };
-    jpeg_decode_memory_alloc_cfg_t out_cfg { .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER };
-    
-    hw_decode_input_buf_ = (uint8_t*)jpeg_alloc_decoder_mem((uint32_t)max_buffer_size, &in_cfg, &hw_decode_input_size_);
-    hw_decode_output_buf_ = (uint8_t*)jpeg_alloc_decoder_mem((uint32_t)max_buffer_size, &out_cfg, &hw_decode_output_size_);
-    
-    if (!hw_decode_input_buf_ || !hw_decode_output_buf_) {
-      ESP_LOGE(TAG, "Failed to allocate HW decoder buffers");
-      if (hw_decode_input_buf_) free(hw_decode_input_buf_);
-      if (hw_decode_output_buf_) free(hw_decode_output_buf_);
-      hw_decode_input_buf_ = nullptr;
-      hw_decode_output_buf_ = nullptr;
-      jpeg_del_decoder_engine(hw_dec_);
-      hw_dec_ = nullptr;
-    } else {
-      ESP_LOGD(TAG, "HW decoder buffers allocated: input=%u, output=%u", 
-               (unsigned)hw_decode_input_size_, (unsigned)hw_decode_output_size_);
-    }
-  }
-#endif
 }
 
 void RemoteWebView::dump_config() {
@@ -86,12 +84,6 @@ void RemoteWebView::dump_config() {
   if (display_) {
     ESP_LOGCONFIG(TAG, "  display: %dx%d", display_->get_width(), display_->get_height());
   }
-
-#if REMOTE_WEBVIEW_HW_JPEG
-  ESP_LOGCONFIG(TAG, "  hw_jpeg: %s", hw_dec_ ? "yes" : "no");
-#else
-  ESP_LOGCONFIG(TAG, "  hw_jpeg: no");
-#endif
 
   ESP_LOGCONFIG(TAG, "  server: %s:%d", server_host_.c_str(), server_port_);
   ESP_LOGCONFIG(TAG, "  url: %s", url_.c_str());
@@ -352,99 +344,43 @@ void RemoteWebView::process_frame_stats_packet_(const uint8_t *data, size_t len)
 }
 
 bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len) {
-  if (!data || !len) return false;
+  if (!data || !len || !jpeg_dec_ || !jpeg_decode_buffer_) return false;
 
-#if REMOTE_WEBVIEW_HW_JPEG
-  if (hw_dec_ && hw_decode_input_buf_ && hw_decode_output_buf_) {
-    jpeg_decode_picture_info_t hdr{};
-    if (jpeg_decoder_get_info(data, (uint32_t)len, &hdr) != ESP_OK || !hdr.width || !hdr.height) {
-      return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
-    }
+  jpeg_dec_io_t io = {
+    .inbuf = (uint8_t*)data,
+    .inbuf_len = (int)len,
+    .inbuf_remain = (int)len,
+    .outbuf = jpeg_decode_buffer_,
+    .out_size = 0,
+  };
 
-    const int aligned_w = (hdr.width  + 15) & ~15;
-    const int aligned_h = (hdr.height + 15) & ~15;
-    const uint32_t out_sz = (uint32_t)aligned_w * (uint32_t)aligned_h * 2u;
-
-    if (aligned_w != (int)hdr.width) {
-      ESP_LOGW(TAG, "jpeg dimensions not aligned: %u x %u", (unsigned)hdr.width, (unsigned)hdr.height);
-      return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
-    }
-    
-    if (len > hw_decode_input_size_ || out_sz > hw_decode_output_size_) {
-      ESP_LOGW(TAG, "tile too large for HW decoder buffers");
-      return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
-    }
-
-    jpeg_decode_cfg_t jcfg{};
-    jcfg.output_format = JPEG_DECODE_OUT_FORMAT_RGB565;
-    jcfg.rgb_order     = JPEG_DEC_RGB_ELEMENT_ORDER_BGR;
-    jcfg.conv_std      = JPEG_YUV_RGB_CONV_STD_BT709;
-
-    memcpy(hw_decode_input_buf_, data, len);
-    
-    uint32_t written = 0;
-    esp_err_t dr = jpeg_decoder_process(hw_dec_, &jcfg, hw_decode_input_buf_, (uint32_t)len, 
-                                        hw_decode_output_buf_, (uint32_t)hw_decode_output_size_, &written);
-
-    if (dr != ESP_OK) {
-      return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
-    }
-
-    display_->draw_pixels_at(dst_x, dst_y, (int)hdr.width, (int)hdr.height, hw_decode_output_buf_,
-        esphome::display::COLOR_ORDER_RGB,
-        esphome::display::COLOR_BITNESS_565,
-        rgb565_big_endian_);
-
-    return true;
-  }
-#endif  // REMOTE_WEBVIEW_HW_JPEG
-
-  return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
-}
-
-bool RemoteWebView::decode_jpeg_tile_software_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len) {
-  if (!jd_.openRAM((uint8_t*)data, (int)len, &RemoteWebView::jpeg_draw_cb_s_)) {
-    ESP_LOGE(TAG, "openRAM failed (len=%u) err=%d", (unsigned)len, jd_.getLastError());
+  jpeg_dec_header_info_t header_info;
+  jpeg_error_t ret = jpeg_dec_parse_header(jpeg_dec_, &io, &header_info);
+  if (ret != JPEG_ERR_OK) {
+    ESP_LOGE(TAG, "jpeg_dec_parse_header failed: %d", ret);
     return false;
   }
 
-  jd_.setMaxOutputSize(4 * 2048);
-  jd_.setPixelType(rgb565_big_endian_ ? RGB565_BIG_ENDIAN : RGB565_LITTLE_ENDIAN);
-
-  const int rc = jd_.decode(dst_x, dst_y, 0);
-  if (rc == 0) {
-    ESP_LOGE(TAG, "decode rc=%d err=%d", rc, jd_.getLastError());
-    jd_.close();
+  const size_t required_size = (size_t)header_info.width * (size_t)header_info.height * 2u;
+  if (required_size > jpeg_decode_buffer_size_) {
+    ESP_LOGE(TAG, "Tile too large: %u bytes > %u bytes buffer", 
+             (unsigned)required_size, (unsigned)jpeg_decode_buffer_size_);
     return false;
   }
-  jd_.close();
+
+  ret = jpeg_dec_process(jpeg_dec_, &io);
+  if (ret != JPEG_ERR_OK) {
+    ESP_LOGE(TAG, "jpeg_dec_process failed: %d", ret);
+    return false;
+  }
+
+  display_->draw_pixels_at(dst_x, dst_y, (int)header_info.width, (int)header_info.height, 
+    jpeg_decode_buffer_,
+    esphome::display::COLOR_ORDER_RGB,
+    esphome::display::COLOR_BITNESS_565,
+    rgb565_big_endian_);
+
   return true;
-}
-
-int RemoteWebView::jpeg_draw_cb_s_(JPEGDRAW *p) {
-  return self_ ? self_->jpeg_draw_cb_(p) : 0;
-}
-
-int RemoteWebView::jpeg_draw_cb_(JPEGDRAW *p) {
-  int32_t x = p->x, y = p->y, w = p->iWidth, h = p->iHeight;
-  const int FB_W = display_->get_width();
-  const int FB_H = display_->get_height();
-
-  if (x >= FB_W || y >= FB_H) return 1;
-  if (x + w > FB_W) w = FB_W - x;
-  if (y + h > FB_H) h = FB_H - y;
-  if (w <= 0 || h <= 0) return 1;
-
-  const bool big_endian = rgb565_big_endian_;
-  display_->draw_pixels_at(
-      x, y, w, h,
-      (const uint8_t *)p->pPixels,
-      esphome::display::COLOR_ORDER_RGB,
-      esphome::display::COLOR_BITNESS_565,
-      big_endian
-  );
-
-  return 1;
 }
 
 bool RemoteWebView::ws_send_touch_event_(proto::TouchType type, int x, int y, uint8_t pid) {

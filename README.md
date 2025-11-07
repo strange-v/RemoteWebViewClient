@@ -37,8 +37,8 @@ esp32:
         ref: 1.5.0
       - name: "espressif/esp-dsp"
         ref: 1.7.0
-      - name: "bitbank2/jpegdec"
-        source: https://github.com/strange-v/jpegdec-esphome
+      - name: "espressif/esp_new_jpeg"
+        version: "^1.0.0"
 
 psram:
   mode: octal
