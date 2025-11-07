@@ -71,6 +71,8 @@ class RemoteWebView : public Component {
   display::Display *display_{nullptr};
   touchscreen::Touchscreen *touch_ = nullptr;
   class RemoteWebViewTouchListener *touch_listener_ = nullptr;
+  int display_width_{0};
+  int display_height_{0};
   std::string url_;
   std::string server_host_;
   std::string device_id_;

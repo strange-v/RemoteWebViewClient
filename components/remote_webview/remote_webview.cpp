@@ -27,6 +27,9 @@ void RemoteWebView::setup() {
     return;
   }
 
+  display_width_ = display_->get_width();
+  display_height_ = display_->get_height();
+
   q_decode_ = xQueueCreate(cfg::decode_queue_depth, sizeof(WsMsg));
   ws_send_mtx_ = xSemaphoreCreateMutex();
 
@@ -299,15 +302,12 @@ void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
   frame_bytes_ += len;
   frame_tiles_ += fi.tile_count;
 
-  const int FB_W = display_ ? display_->get_width()  : 480;
-  const int FB_H = display_ ? display_->get_height() : 480;
-
   for (uint16_t i = 0; i < fi.tile_count; i++) {
     proto::TileHeader th{};
     if (!proto::parse_tile_header(data, len, th, off)) return;
     if (off + th.dlen > len) return;
 
-    if (th.w == 0 || th.h == 0 || th.w > FB_W || th.h > FB_H) {
+    if (th.w == 0 || th.h == 0 || th.w > display_width_ || th.h > display_height_) {
       off += th.dlen;
       continue;
     }
@@ -317,7 +317,6 @@ void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
     }
     
     off += th.dlen;
-    taskYIELD();
   }
 
   if (fi.flags & proto::kFlafLastOfFrame) {
@@ -408,7 +407,7 @@ bool RemoteWebView::decode_jpeg_tile_software_(int16_t dst_x, int16_t dst_y, con
     return false;
   }
 
-  jd_.setMaxOutputSize(4 * 2048);
+  jd_.setMaxOutputSize(8 * 2048);
   jd_.setPixelType(rgb565_big_endian_ ? RGB565_BIG_ENDIAN : RGB565_LITTLE_ENDIAN);
 
   const int rc = jd_.decode(dst_x, dst_y, 0);
@@ -427,21 +426,18 @@ int RemoteWebView::jpeg_draw_cb_s_(JPEGDRAW *p) {
 
 int RemoteWebView::jpeg_draw_cb_(JPEGDRAW *p) {
   int32_t x = p->x, y = p->y, w = p->iWidth, h = p->iHeight;
-  const int FB_W = display_->get_width();
-  const int FB_H = display_->get_height();
-
-  if (x >= FB_W || y >= FB_H) return 1;
-  if (x + w > FB_W) w = FB_W - x;
-  if (y + h > FB_H) h = FB_H - y;
+  
+  if (x >= display_width_ || y >= display_height_) return 1;
+  if (x + w > display_width_) w = display_width_ - x;
+  if (y + h > display_height_) h = display_height_ - y;
   if (w <= 0 || h <= 0) return 1;
 
-  const bool big_endian = rgb565_big_endian_;
   display_->draw_pixels_at(
       x, y, w, h,
       (const uint8_t *)p->pPixels,
       esphome::display::COLOR_ORDER_RGB,
       esphome::display::COLOR_BITNESS_565,
-      big_endian
+      rgb565_big_endian_
   );
 
   return 1;
@@ -627,10 +623,8 @@ std::string RemoteWebView::build_ws_uri_() const {
   const std::string id = resolve_device_id_();
   append_q_str_(uri, "id", id.c_str());
 
-  const int W = display_ ? display_->get_width()  : 0;
-  const int H = display_ ? display_->get_height() : 0;
-  append_q_int_(uri, "w", W);
-  append_q_int_(uri, "h", H);
+  append_q_int_(uri, "w", display_width_);
+  append_q_int_(uri, "h", display_height_);
 
   append_q_int_(uri,   "r",    rotation_);
   append_q_int_(uri,   "ts",   tile_size_);
