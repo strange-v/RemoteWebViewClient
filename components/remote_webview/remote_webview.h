@@ -12,6 +12,19 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  #include "driver/jpeg_decode.h"
+  #define REMOTE_WEBVIEW_HW_JPEG 1
+#else
+  #define REMOTE_WEBVIEW_HW_JPEG 0
+#endif
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  #include "esp_cache.h"
+  #define REMOTE_WEBVIEW_HAS_CACHE_MSYNC 1
+#else
+  #define REMOTE_WEBVIEW_HAS_CACHE_MSYNC 0
+#endif
+
 namespace esphome {
 namespace remote_webview {
 
@@ -58,6 +71,8 @@ class RemoteWebView : public Component {
   display::Display *display_{nullptr};
   touchscreen::Touchscreen *touch_ = nullptr;
   class RemoteWebViewTouchListener *touch_listener_ = nullptr;
+  int display_width_{0};
+  int display_height_{0};
   std::string url_;
   std::string server_host_;
   std::string device_id_;
@@ -72,6 +87,14 @@ class RemoteWebView : public Component {
   int max_bytes_per_msg_{-1};
   bool rgb565_big_endian_{true};
   int rotation_{0};
+
+#if REMOTE_WEBVIEW_HW_JPEG
+  jpeg_decoder_handle_t hw_dec_{nullptr};
+  uint8_t *hw_decode_input_buf_{nullptr};
+  uint8_t *hw_decode_output_buf_{nullptr};
+  size_t hw_decode_input_size_{0};
+  size_t hw_decode_output_size_{0};
+#endif
 
   uint64_t last_move_us_{0};
   uint64_t last_keepalive_us_{0};
@@ -103,6 +126,7 @@ class RemoteWebView : public Component {
   void process_frame_packet_(const uint8_t *data, size_t len);
   void process_frame_stats_packet_(const uint8_t *data, size_t len);
   bool decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len);
+  bool decode_jpeg_tile_software_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len);
 
   static int jpeg_draw_cb_s_(JPEGDRAW *p);
   int jpeg_draw_cb_(JPEGDRAW *p);

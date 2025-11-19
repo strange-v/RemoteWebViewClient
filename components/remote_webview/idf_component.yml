@@ -3,3 +3,11 @@ dependencies:
   - espressif/esp_websocket_client
   - espressif/esp-dsp
   - jpegdec
+
+  - esp_driver_jpeg:
+    require: private
+    rules: [ { if: target == "esp32p4" } ]
+
+  - esp_mm:
+    require: private
+    rules: [ { if: target == "esp32p4" } ]
