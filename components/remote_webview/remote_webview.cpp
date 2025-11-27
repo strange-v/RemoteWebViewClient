@@ -463,7 +463,7 @@ bool RemoteWebView::ws_send_touch_event_(proto::TouchType type, int x, int y, ui
 }
 
 void RemoteWebViewTouchListener::touch(touchscreen::TouchPoint tp) {
-  if (!parent_) return;
+  if (!parent_ || parent_->touch_disabled_) return;
   parent_->ws_send_touch_event_(proto::TouchType::Down, tp.x, tp.y, tp.id);
 }
 
