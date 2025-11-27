@@ -156,7 +156,12 @@ void RemoteWebView::ws_task_tramp_(void *arg) {
   ESP_ERROR_CHECK(esp_websocket_client_start(client));
 
   for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    if (!esp_websocket_client_is_connected(client)) {
+      esp_websocket_client_reconnect(client);
+      continue;
+    }
 
     if (self && self->ws_client_ && esp_websocket_client_is_connected(self->ws_client_)) {
       const uint64_t now = esp_timer_get_time();
@@ -195,7 +200,18 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
       ESP_LOGI(TAG, "[ws] disconnected");
       if (self_) self_->last_keepalive_us_ = 0; 
       reasm_reset_(*r);
+      esp_websocket_client_reconnect(e->client);
       break;
+
+#ifdef WEBSOCKET_EVENT_CLOSED
+    case WEBSOCKET_EVENT_CLOSED:
+      if (self_) self_->ws_client_ = nullptr;
+      ESP_LOGI(TAG, "[ws] closed");
+      if (self_) self_->last_keepalive_us_ = 0; 
+      reasm_reset_(*r);
+      esp_websocket_client_reconnect(e->client);
+      break;
+#endif
 
     case WEBSOCKET_EVENT_DATA: {
       if (!self_) break;
