@@ -19,6 +19,12 @@ namespace remote_webview {
 static const char *const TAG = "Remote_WebView";
 RemoteWebView *RemoteWebView::self_ = nullptr;
 
+static inline void websocket_force_reconnect(esp_websocket_client_handle_t client) {
+  if (!client) return;
+  esp_websocket_client_stop(client);
+  esp_websocket_client_start(client);
+}
+
 void RemoteWebView::setup() {
   self_ = this;
 
@@ -159,7 +165,7 @@ void RemoteWebView::ws_task_tramp_(void *arg) {
     vTaskDelay(pdMS_TO_TICKS(5000));
 
     if (!esp_websocket_client_is_connected(client)) {
-      esp_websocket_client_reconnect(client);
+      websocket_force_reconnect(client);
       continue;
     }
 
@@ -200,7 +206,7 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
       ESP_LOGI(TAG, "[ws] disconnected");
       if (self_) self_->last_keepalive_us_ = 0; 
       reasm_reset_(*r);
-      esp_websocket_client_reconnect(e->client);
+      websocket_force_reconnect(e->client);
       break;
 
 #ifdef WEBSOCKET_EVENT_CLOSED
@@ -209,7 +215,7 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
       ESP_LOGI(TAG, "[ws] closed");
       if (self_) self_->last_keepalive_us_ = 0; 
       reasm_reset_(*r);
-      esp_websocket_client_reconnect(e->client);
+      websocket_force_reconnect(e->client);
       break;
 #endif
 
