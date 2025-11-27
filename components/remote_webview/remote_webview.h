@@ -45,6 +45,7 @@ class RemoteWebView : public Component {
   void set_max_bytes_per_msg(int v) { max_bytes_per_msg_ = v; }
   void set_big_endian(bool v) { rgb565_big_endian_ = v; }
   void set_rotation(int v) { rotation_ = v; }
+  void disable_touch(bool disable);
   bool open_url(const std::string &s);
 
   void setup() override;
@@ -87,6 +88,7 @@ class RemoteWebView : public Component {
   int max_bytes_per_msg_{-1};
   bool rgb565_big_endian_{true};
   int rotation_{0};
+  bool touch_disabled_{false};
 
 #if REMOTE_WEBVIEW_HW_JPEG
   jpeg_decoder_handle_t hw_dec_{nullptr};

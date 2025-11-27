@@ -19,6 +19,12 @@ namespace remote_webview {
 static const char *const TAG = "Remote_WebView";
 RemoteWebView *RemoteWebView::self_ = nullptr;
 
+static inline void websocket_force_reconnect(esp_websocket_client_handle_t client) {
+  if (!client) return;
+  esp_websocket_client_stop(client);
+  esp_websocket_client_start(client);
+}
+
 void RemoteWebView::setup() {
   self_ = this;
 
@@ -156,7 +162,12 @@ void RemoteWebView::ws_task_tramp_(void *arg) {
   ESP_ERROR_CHECK(esp_websocket_client_start(client));
 
   for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    if (!esp_websocket_client_is_connected(client)) {
+      websocket_force_reconnect(client);
+      continue;
+    }
 
     if (self && self->ws_client_ && esp_websocket_client_is_connected(self->ws_client_)) {
       const uint64_t now = esp_timer_get_time();
@@ -195,7 +206,18 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
       ESP_LOGI(TAG, "[ws] disconnected");
       if (self_) self_->last_keepalive_us_ = 0; 
       reasm_reset_(*r);
+      websocket_force_reconnect(e->client);
       break;
+
+#ifdef WEBSOCKET_EVENT_CLOSED
+    case WEBSOCKET_EVENT_CLOSED:
+      if (self_) self_->ws_client_ = nullptr;
+      ESP_LOGI(TAG, "[ws] closed");
+      if (self_) self_->last_keepalive_us_ = 0; 
+      reasm_reset_(*r);
+      websocket_force_reconnect(e->client);
+      break;
+#endif
 
     case WEBSOCKET_EVENT_DATA: {
       if (!self_) break;
@@ -444,6 +466,9 @@ int RemoteWebView::jpeg_draw_cb_(JPEGDRAW *p) {
 }
 
 bool RemoteWebView::ws_send_touch_event_(proto::TouchType type, int x, int y, uint8_t pid) {
+  if (touch_disabled_)
+    return false;
+
   if (!ws_client_ || !ws_send_mtx_ || !esp_websocket_client_is_connected(ws_client_))
     return false;
 
@@ -460,11 +485,6 @@ bool RemoteWebView::ws_send_touch_event_(proto::TouchType type, int x, int y, ui
   int r = esp_websocket_client_send_bin(ws_client_, (const char*)pkt, (int)n, to);
   xSemaphoreGive(ws_send_mtx_);
   return r == (int)n;
-}
-
-void RemoteWebViewTouchListener::touch(touchscreen::TouchPoint tp) {
-  if (!parent_) return;
-  parent_->ws_send_touch_event_(proto::TouchType::Down, tp.x, tp.y, tp.id);
 }
 
 bool RemoteWebView::ws_send_open_url_(const char *url, uint16_t flags) {
@@ -510,10 +530,9 @@ bool RemoteWebView::ws_send_keepalive_() {
   return r == (int)n;
 }
 
-
-
 void RemoteWebViewTouchListener::update(const touchscreen::TouchPoints_t &pts) {
   if (!parent_) return;
+
   const uint64_t now = esp_timer_get_time();
   for (auto &p : pts) {
     switch (p.state) {
@@ -540,6 +559,17 @@ void RemoteWebViewTouchListener::release() {
   if (!parent_) return;
   
   parent_->ws_send_touch_event_(proto::TouchType::Up, 0, 0, 0);
+}
+
+void RemoteWebViewTouchListener::touch(touchscreen::TouchPoint tp) {
+  if (!parent_) return;
+  
+  parent_->ws_send_touch_event_(proto::TouchType::Down, tp.x, tp.y, tp.id);
+}
+
+void RemoteWebView::disable_touch(bool disable) {
+  touch_disabled_ = disable;
+  ESP_LOGD(TAG, "touch %s", disable ? "disabled" : "enabled");
 }
 
 void RemoteWebView::set_server(const std::string &s) {

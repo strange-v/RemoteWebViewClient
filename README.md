@@ -35,8 +35,6 @@ esp32:
     components:
       - name: "espressif/esp_websocket_client"
         ref: 1.5.0
-      - name: "espressif/esp-dsp"
-        ref: 1.7.0
       - name: "bitbank2/jpegdec"
         source: https://github.com/strange-v/jpegdec-esphome
 
