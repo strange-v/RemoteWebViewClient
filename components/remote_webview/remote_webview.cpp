@@ -462,11 +462,6 @@ bool RemoteWebView::ws_send_touch_event_(proto::TouchType type, int x, int y, ui
   return r == (int)n;
 }
 
-void RemoteWebViewTouchListener::touch(touchscreen::TouchPoint tp) {
-  if (!parent_ || parent_->touch_disabled_) return;
-  parent_->ws_send_touch_event_(proto::TouchType::Down, tp.x, tp.y, tp.id);
-}
-
 bool RemoteWebView::ws_send_open_url_(const char *url, uint16_t flags) {
   if (!ws_client_ || !ws_send_mtx_ ||  !url || !esp_websocket_client_is_connected(ws_client_))
     return false;
@@ -510,10 +505,9 @@ bool RemoteWebView::ws_send_keepalive_() {
   return r == (int)n;
 }
 
-
-
 void RemoteWebViewTouchListener::update(const touchscreen::TouchPoints_t &pts) {
-  if (!parent_) return;
+  if (!parent_ || parent_->touch_disabled_) return;
+
   const uint64_t now = esp_timer_get_time();
   for (auto &p : pts) {
     switch (p.state) {
@@ -537,9 +531,15 @@ void RemoteWebViewTouchListener::update(const touchscreen::TouchPoints_t &pts) {
 }
 
 void RemoteWebViewTouchListener::release() {
-  if (!parent_) return;
+  if (!parent_ || parent_->touch_disabled_) return;
   
   parent_->ws_send_touch_event_(proto::TouchType::Up, 0, 0, 0);
+}
+
+void RemoteWebViewTouchListener::touch(touchscreen::TouchPoint tp) {
+  if (!parent_ || parent_->touch_disabled_) return;
+  
+  parent_->ws_send_touch_event_(proto::TouchType::Down, tp.x, tp.y, tp.id);
 }
 
 void RemoteWebView::set_server(const std::string &s) {
