@@ -58,7 +58,7 @@ struct RWV_PACKED OpenURLHeader {
 };
 static_assert(sizeof(OpenURLHeader) == 8, "OpenURLHeader wire size must be 8");
 
-// [type:1][ver:1][url_len:4] => 6 bytes -- This is the Current URL the display is showing
+// [type:1][ver:1][url_len:4] => 6 bytes
 struct RWV_PACKED CurrentURLHeader {
   MsgType type;
   uint8_t ver;

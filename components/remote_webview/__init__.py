@@ -21,7 +21,7 @@ CONF_MAX_BYTES_PER_MSG = "max_bytes_per_msg"
 CONF_BIG_ENDIAN = "big_endian"
 
 CONF_ON_FRAME_UPDATE = "on_frame_update"
-CONF_CURRENT_URL_DISPLAYED = "current_url_sensor"
+CONF_CURRENT_URL_SENSOR = "current_url_sensor"
 
 _SERVER_RE = re.compile(
     r"^(?P<host>[A-Za-z0-9](?:[A-Za-z0-9\-\.]*[A-Za-z0-9])?)\:(?P<port>\d{1,5})$"
@@ -47,12 +47,10 @@ def validate_host_port(value):
 ns = cg.esphome_ns.namespace("remote_webview")
 RemoteWebView = ns.class_("RemoteWebView", cg.Component)
 
-# on_frame_update automation items
-# Action
 TriggerOnFrameUpdateAction = ns.class_(
     "TriggerOnFrameUpdateAction", automation.Action
 )
-# Trigger
+
 OnFrameUpdateTrigger = ns.class_(
     "OnFrameUpdateTrigger", automation.Trigger.template()
 )
@@ -76,14 +74,12 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_MAX_BYTES_PER_MSG): cv.int_,
         cv.Optional(CONF_BIG_ENDIAN): cv.boolean,
         cv.Optional(CONF_ROTATION): validate_rotation,
-
-        
         cv.Optional(CONF_ON_FRAME_UPDATE): automation.validate_automation(
             {
                 cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(OnFrameUpdateTrigger),
             }
         ),
-        cv.Optional(CONF_CURRENT_URL_DISPLAYED): text_sensor.text_sensor_schema(),
+        cv.Optional(CONF_CURRENT_URL_SENSOR): text_sensor.text_sensor_schema(),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -94,7 +90,6 @@ REMOTEWEBVIEW_ACTION_SCHEMA = cv.Schema(
     }
 )
 
-# Automation register
 @automation.register_action(
     "remote_webview.trigger_on_frame_update",
     TriggerOnFrameUpdateAction,
@@ -140,15 +135,12 @@ async def to_code(config):
     if CONF_ROTATION in config:
         cg.add(var.set_rotation(config[CONF_ROTATION]))
 
-
     await cg.register_component(var, config)
 
     for conf in config.get(CONF_ON_FRAME_UPDATE, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
         await automation.build_automation(trigger, [], conf)
         
-    # Current URL sensor
-    if CONF_CURRENT_URL_DISPLAYED in config:
-        sens = await text_sensor.new_text_sensor(config[CONF_CURRENT_URL_DISPLAYED])
-        cg.add(var.set_url_sensor(sens)) 
-
+    if CONF_CURRENT_URL_SENSOR in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_CURRENT_URL_SENSOR])
+        cg.add(var.set_url_sensor(sens))

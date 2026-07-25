@@ -151,16 +151,10 @@ remote_webview:
   full_frame_tile_count: 1
   max_bytes_per_msg: 61440
   jpeg_quality: 85
-  # Optional: Trigger an automation when the display updates (Rate-limited to 1 per second)
   on_frame_update:
     - logger.log: "The display just received a frame update!"
-  # Optional: Expose the browser's current URL to Home Assistant/ESPHome
-  current_url_displayed:
+  current_url_sensor:
     name: "Remote Display Current URL"
-    on_value:
-      - logger.log:
-          format: "Navigated to: %s"
-          args: [ 'x.c_str()' ]
 
 text:
   - platform: template
@@ -199,7 +193,7 @@ text:
 | `big_endian`            | bool      | ❌       | `true` or `false`                 | Use big-endian RGB565 pixel order for JPEG output (set false for little-endian panels). Default is `true`. |
 | `rotation`              | int       | ❌       | 0, 90, 180, 270                   | Enables software rotation for both the display and touchscreen. |
 | `on_frame_update`       | action    | ❌       | `- logger.log: "The display just received a frame update!"`  | Action that gets triggered each time the display updates (maximum of 1 trigger per second) |
-| `current_url_displayed` | text_sensor | ❌      | `name: "Current URL"`            | Exposes the URL currently loaded in the server's headless browser as an ESPHome Text Sensor. Supports on_value automations. |
+| `current_url_sensor`    | text_sensor | ❌      | `name: "Current URL"`            | Exposes the URL currently loaded in the server's headless browser as an ESPHome Text Sensor. Supports on_value automations. |
 
 
 ## Recommendations
@@ -214,31 +208,7 @@ text:
 
 ## On-screen keyboard
 
-There is a Javascript based on-screen keyboard with the Latin/English alphabet. Simply click into input elements that allow Keyboard inputs and the Javascript keyboard should pop up.
+The device does not provide a native on-screen keyboard.
 
-<img src="images/osk-1.png" height="250px"><img src="images/osk-2.png" height="250px"><img src="images/osk-3.png" height="250px">
-
-## No on-screen keyboard
-
-If this on-screen keyboard is misbehaving, you’ll need to [use Chrome DevTools](https://github.com/strange-v/RemoteWebViewServer#accessing-the-servers-tab-with-chrome-devtools) for any required input.
-
-## Browser test client (WIP)
-
-This repository now includes a browser-based test client in [web_client](web_client) for quicker development loops without reflashing ESP devices.
-
-### Current features
-
-- WebSocket connection with reconnect and keepalive.
-- Binary protocol compatibility for **Frame**, **Touch**, **OpenURL**, and **Keepalive** packets.
-- JPEG tile rendering to HTML5 canvas.
-- Pointer/touch forwarding (`down/move/up`) with move coalescing.
-
-### Run locally
-
-```bash
-cd web_client
-npm install
-npm run dev
-```
-
-Open the local Vite URL in your browser, set server/display params, click **Connect**, then use **Send open_url** for navigation tests.
+You can enable and use a server-side keyboard in [Remote WebView Server](https://github.com/strange-v/RemoteWebViewServer#on-screen-keyboard).
+You can also use [Chrome DevTools](https://github.com/strange-v/RemoteWebViewServer#accessing-the-servers-tab-with-chrome-devtools) when input is needed.
