@@ -301,7 +301,7 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
         m.buf = r->buf; m.len = r->total; m.client = e->client;
         r->buf = nullptr; r->total = 0; r->filled = 0;
         if (!self_->q_decode_ || xQueueSend(self_->q_decode_, &m, 0) != pdTRUE) {
-          ESP_LOGW(TAG, "decode queue full, dropping packet");
+          ESP_LOGE(TAG, "decode queue full, dropping packet");
           free(m.buf);
         }
       }
