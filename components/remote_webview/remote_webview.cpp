@@ -474,9 +474,16 @@ bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const
     
     uint32_t written = 0;
     esp_err_t dr = jpeg_decoder_process(hw_dec_, &jcfg, hw_decode_input_buf_, (uint32_t)len, 
-                                        hw_decode_output_buf_, (uint32_t)hw_decode_output_size_, &written);
+                                        hw_decode_output_buf_, out_sz, &written);
 
     if (dr != ESP_OK) {
+      return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
+    }
+
+    const uint32_t visible_sz = (uint32_t)hdr.width * (uint32_t)hdr.height * 2u;
+    if (written < visible_sz) {
+      ESP_LOGW(TAG, "incomplete HW JPEG decode: expected at least %u bytes, got %u",
+               (unsigned)visible_sz, (unsigned)written);
       return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
     }
 
