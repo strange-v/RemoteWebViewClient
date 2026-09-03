@@ -151,6 +151,10 @@ remote_webview:
   full_frame_tile_count: 1
   max_bytes_per_msg: 61440
   jpeg_quality: 85
+  # ESP32-P4 only; both options are ignored on other targets.
+  hw_decode: true
+  hw_decode_timeout_ms: 200
+  
   on_frame_update:
     - logger.log: "The display just received a frame update!"
   current_url_sensor:
@@ -204,6 +208,8 @@ text:
 - **max_bytes_per_msg** should be larger than your maximum tile size (full-frame or partial).
 - **jpeg_quality** — lower values encode faster and reduce bandwidth (but increase artifacts). Start at **85**, drop toward **70–75** if you need speed.
 - **big_endian** — defaults to **true**. If colors look wrong (swapped/tinted), set `big_endian: false` for panels that require little-endian RGB565.
+- **hw_decode** — ESP32-P4 only; defaults to **true**. Set to `false` to use the software JPEG decoder.
+- **hw_decode_timeout_ms** — ESP32-P4 only; defaults to **200**. Timeout passed to the hardware JPEG decoder engine.
 - **Red tile / red screen** — this indicates a tile payload exceeded `max_bytes_per_msg`. Increase `max_bytes_per_msg` or reduce tile size/JPEG quality so each tile fits.
 
 ## On-screen keyboard

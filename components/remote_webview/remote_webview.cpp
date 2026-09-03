@@ -88,14 +88,16 @@ void RemoteWebView::setup() {
   }
 
 #if REMOTE_WEBVIEW_HW_JPEG
-  jpeg_decode_engine_cfg_t jcfg = {
-    .timeout_ms = 200,
-  };
-  if (jpeg_new_decoder_engine(&jcfg, &hw_dec_) != ESP_OK) {
-    hw_dec_ = nullptr;
+  if (this->hw_decode_) {
+    jpeg_decode_engine_cfg_t jcfg = {
+      .timeout_ms = this->hw_decode_timeout_ms_,
+    };
+    if (jpeg_new_decoder_engine(&jcfg, &hw_dec_) != ESP_OK) {
+      hw_dec_ = nullptr;
+    }
   }
-  
-  if (hw_dec_) {
+
+  if (this->hw_dec_) {
     const int W = display_->get_width();
     const int H = display_->get_height();
     const int aligned_w = (W + 15) & ~15;
@@ -156,7 +158,10 @@ void RemoteWebView::dump_config() {
   }
 
 #if REMOTE_WEBVIEW_HW_JPEG
-  ESP_LOGCONFIG(TAG, "  hw_jpeg: %s", hw_dec_ ? "yes" : "no");
+  ESP_LOGCONFIG(TAG, "  hw_decode: %s", this->hw_decode_ ? "true" : "false");
+  if (this->hw_decode_)
+    ESP_LOGCONFIG(TAG, "  hw_decode_timeout_ms: %d", this->hw_decode_timeout_ms_);
+  ESP_LOGCONFIG(TAG, "  hw_jpeg_available: %s", hw_dec_ ? "yes" : "no");
 #else
   ESP_LOGCONFIG(TAG, "  hw_jpeg: no");
 #endif
