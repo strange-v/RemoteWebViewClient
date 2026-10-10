@@ -655,8 +655,8 @@ bool RemoteWebView::ws_send_touch_event_(proto::TouchType type, int x, int y, ui
   if (touch_disabled_)
     return false;
 
-  if (x < 0) x = 0; if (y < 0) y = 0;
-  if (x > 65535) x = 65535; if (y > 65535) y = 65535;
+  x = std::clamp(x, 0, 65535);
+  y = std::clamp(y, 0, 65535);
 
   uint8_t pkt[sizeof(proto::TouchPacket)];
   const size_t n = proto::build_touch_packet(type, pid, x, y, pkt);
@@ -890,7 +890,7 @@ std::string RemoteWebView::resolve_device_id_() const {
 
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "Failed to read MAC address, using random ID");
-    snprintf((char*)mac, sizeof(mac), "%06lx", (unsigned long)esp_random());
+    esp_fill_random(mac, sizeof(mac));
   }
 
   char buf[32];
