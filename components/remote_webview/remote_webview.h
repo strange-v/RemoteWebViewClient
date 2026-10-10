@@ -119,6 +119,8 @@ class RemoteWebView : public Component {
   uint32_t frame_id_{0xffffffffu};
   uint16_t frame_tiles_{0};
   uint16_t frame_failed_tiles_{0};
+  uint16_t frame_hw_fallback_tiles_{0};  // tiles decoded in software after a HW decode fallback
+  uint64_t last_hw_fallback_log_us_{0};
   size_t   frame_bytes_{0};
 
   // Screen sync tracking. The screen is out of sync when a message was lost on receive

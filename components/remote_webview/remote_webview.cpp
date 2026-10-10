@@ -447,6 +447,7 @@ void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
     frame_id_ = fi.frame_id;
     frame_tiles_= 0;
     frame_failed_tiles_ = 0;
+    frame_hw_fallback_tiles_ = 0;
     frame_bytes_= 0;
     frame_start_us_ = esp_timer_get_time();
     frame_is_full_ = (fi.flags & proto::kFlagIsFullFrame) != 0;
@@ -496,6 +497,13 @@ void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
 
     if (frame_failed_tiles_)
       ESP_LOGW(TAG, "frame %lu: %u of %u tiles failed", frame_id_, frame_failed_tiles_, frame_tiles_);
+
+    // Per-tile reasons are logged at VERBOSE; warn about software fallback at most every 10 s.
+    if (frame_hw_fallback_tiles_ && frame_start_us_ - last_hw_fallback_log_us_ >= 10ULL * 1000 * 1000) {
+      last_hw_fallback_log_us_ = frame_start_us_;
+      ESP_LOGW(TAG, "frame %lu: %u of %u tiles fell back to software JPEG decoding",
+               frame_id_, frame_hw_fallback_tiles_, frame_tiles_);
+    }
 
     if (frame_is_full_ && frame_complete_) {
       // Repairs every loss stamped up to the start of this frame. Losses after it keep
@@ -559,12 +567,14 @@ bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const
     const uint32_t out_sz = (uint32_t)aligned_w * (uint32_t)aligned_h * 2u;
 
     if (aligned_w != (int)hdr.width) {
-      ESP_LOGW(TAG, "jpeg dimensions not aligned: %u x %u", (unsigned)hdr.width, (unsigned)hdr.height);
+      ESP_LOGV(TAG, "HW fallback: jpeg dimensions not aligned: %u x %u", (unsigned)hdr.width, (unsigned)hdr.height);
+      frame_hw_fallback_tiles_++;
       return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
     }
     
     if (len > hw_decode_input_size_ || out_sz > hw_decode_output_size_) {
-      ESP_LOGW(TAG, "tile too large for HW decoder buffers");
+      ESP_LOGV(TAG, "HW fallback: tile too large for HW decoder buffers");
+      frame_hw_fallback_tiles_++;
       return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
     }
 
@@ -580,13 +590,16 @@ bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const
                                         hw_decode_output_buf_, out_sz, &written);
 
     if (dr != ESP_OK) {
+      ESP_LOGV(TAG, "HW fallback: decode failed: %s", esp_err_to_name(dr));
+      frame_hw_fallback_tiles_++;
       return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
     }
 
     const uint32_t visible_sz = (uint32_t)hdr.width * (uint32_t)hdr.height * 2u;
     if (written < visible_sz) {
-      ESP_LOGW(TAG, "incomplete HW JPEG decode: expected at least %u bytes, got %u",
+      ESP_LOGV(TAG, "HW fallback: incomplete decode: expected at least %u bytes, got %u",
                (unsigned)visible_sz, (unsigned)written);
+      frame_hw_fallback_tiles_++;
       return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
     }
 
@@ -861,7 +874,21 @@ void RemoteWebView::append_q_float_(std::string &s, const char *k, float v) {
 void RemoteWebView::append_q_str_(std::string &s, const char *k, const char *v) {
   if (!v || !*v) return;
   s += (s.find('?') == std::string::npos) ? '?' : '&';
-  s += k; s += '='; s += v;
+  s += k; s += '=';
+
+  // Percent-encode everything except RFC 3986 unreserved characters.
+  static const char hex[] = "0123456789ABCDEF";
+  for (const unsigned char *p = (const unsigned char *)v; *p; p++) {
+    const unsigned char c = *p;
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+        c == '-' || c == '_' || c == '.' || c == '~') {
+      s += (char)c;
+    } else {
+      s += '%';
+      s += hex[c >> 4];
+      s += hex[c & 0x0F];
+    }
+  }
 }
 
 std::string RemoteWebView::resolve_device_id_() const {
