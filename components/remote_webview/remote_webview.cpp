@@ -172,6 +172,8 @@ void RemoteWebView::dump_config() {
   ESP_LOGCONFIG(TAG, "  hw_jpeg: no");
 #endif
 
+  if (stats_interval_ms_)
+    ESP_LOGCONFIG(TAG, "  stats_interval: %u ms", (unsigned)stats_interval_ms_);
   ESP_LOGCONFIG(TAG, "  server: %s:%d", server_host_.c_str(), server_port_);
   ESP_LOGCONFIG(TAG, "  url: %s", get_url_().c_str());
 
@@ -274,6 +276,7 @@ void RemoteWebView::ws_task_tramp_(void *arg) {
           now_us - self->last_full_frame_req_us_.load() >= cfg::full_frame_request_interval_us) {
         if (self->ws_send_request_full_frame_()) {
           self->last_full_frame_req_us_.store(now_us);
+          self->full_frame_reqs_.fetch_add(1);
           ESP_LOGD(TAG, "[ws] screen out of sync, full frame requested");
         }
       }
@@ -340,6 +343,7 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
           self_->note_rx_loss_();
         }
         reasm_reset_(*r);
+        r->start_us = esp_timer_get_time();
         const size_t max_allowed = (self_ && self_->max_bytes_per_msg_ > 0)
                                    ? (size_t)self_->max_bytes_per_msg_
                                    : cfg::ws_max_message_bytes;
@@ -374,11 +378,16 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
         WsMsg m;
         m.buf = r->buf; m.len = r->total; m.client = e->client;
         m.rx_loss_seq = self_->rx_loss_seq_.load();
+        m.rx_start_us = r->start_us;
+        m.enqueue_us = esp_timer_get_time();
         r->buf = nullptr; r->total = 0; r->filled = 0;
         if (!self_->q_decode_ || xQueueSend(self_->q_decode_, &m, 0) != pdTRUE) {
           ESP_LOGE(TAG, "decode queue full, dropping packet");
           free(m.buf);
           self_->note_rx_loss_();
+        } else {
+          const uint32_t depth = (uint32_t)uxQueueMessagesWaiting(self_->q_decode_);
+          if (depth > self_->q_hwm_.load()) self_->q_hwm_.store(depth);
         }
       }
       break;
@@ -402,14 +411,57 @@ bool RemoteWebView::start_decode_task_() {
 void RemoteWebView::decode_task_tramp_(void *arg) {
   auto *self = reinterpret_cast<RemoteWebView*>(arg);
   WsMsg m;
+  // With stats enabled, wake up periodically so a window is reported even when idle.
+  const TickType_t wait = self->stats_interval_ms_ ? pdMS_TO_TICKS(self->stats_interval_ms_) : portMAX_DELAY;
   for (;;) {
-    if (xQueueReceive(self->q_decode_, &m, portMAX_DELAY) == pdTRUE) {
+    if (xQueueReceive(self->q_decode_, &m, wait) == pdTRUE) {
       self->msg_loss_seq_ = m.rx_loss_seq;
+      self->msg_rx_start_us_ = m.rx_start_us;
+      self->msg_enqueue_us_ = m.enqueue_us;
+      self->msg_dequeue_us_ = esp_timer_get_time();
       self->process_packet_(m.client, m.buf, m.len);
       self->prev_msg_loss_seq_ = m.rx_loss_seq;
       free(m.buf);
     }
+    if (self->stats_interval_ms_)
+      self->maybe_report_stats_();
   }
+}
+
+void RemoteWebView::maybe_report_stats_() {
+  const int64_t now = esp_timer_get_time();
+  if (st_window_start_us_ == 0) {
+    st_window_start_us_ = now;
+    st_loss_seq_ = rx_loss_seq_.load();
+    return;
+  }
+  const int64_t elapsed_us = now - st_window_start_us_;
+  if (elapsed_us < (int64_t)stats_interval_ms_ * 1000) return;
+
+  const uint32_t loss_seq = rx_loss_seq_.load();
+  const uint32_t dropped = loss_seq - st_loss_seq_;
+  const uint32_t q_max = q_hwm_.exchange(0);
+  const uint32_t reqs = full_frame_reqs_.exchange(0);
+  const PerfStats s = st_;
+  st_ = PerfStats{};
+  st_window_start_us_ = now;
+  st_loss_seq_ = loss_seq;
+
+  if (s.frames == 0 && dropped == 0 && reqs == 0) return;  // idle window
+
+  const float secs = (float)elapsed_us / 1e6f;
+  const float n = s.frames ? (float)s.frames : 1.0f;
+  auto avg_ms = [n](uint64_t us) { return (float)us / n / 1000.0f; };
+
+  ESP_LOGI(TAG, "stats %.1f s: %u frames (%.1f fps, %u full), %u tiles, %.1f KiB/s",
+           secs, (unsigned)s.frames, s.frames / secs, (unsigned)s.full_frames, (unsigned)s.tiles,
+           (float)s.bytes / 1024.0f / secs);
+  ESP_LOGI(TAG, "  per frame avg: total %.1f ms (max %.1f), rx %.1f, queue %.1f, decode %.1f, draw %.1f ms",
+           avg_ms(s.total_us), s.total_max_us / 1000.0f, avg_ms(s.rx_us), avg_ms(s.queue_us),
+           avg_ms(s.decode_us), avg_ms(s.draw_us));
+  ESP_LOGI(TAG, "  queue max %u/%d, dropped %u, failed tiles %u, hw fallback tiles %u, full-frame requests %u",
+           (unsigned)q_max, cfg::decode_queue_depth, (unsigned)dropped, (unsigned)s.failed_tiles,
+           (unsigned)s.hw_fallback_tiles, (unsigned)reqs);
 }
 
 void RemoteWebView::process_packet_(void * /*client*/, const uint8_t *data, size_t len) {
@@ -453,7 +505,13 @@ void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
     frame_is_full_ = (fi.flags & proto::kFlagIsFullFrame) != 0;
     frame_loss_seq_ = prev_msg_loss_seq_;
     frame_complete_ = true;
+    ft_rx_start_us_ = msg_rx_start_us_;
+    ft_queue_us_ = 0;
+    ft_decode_us_ = 0;
+    ft_draw_us_ = 0;
   }
+  ft_rx_end_us_ = msg_enqueue_us_;
+  ft_queue_us_ += (uint32_t)(msg_dequeue_us_ - msg_enqueue_us_);
   // A message lost right before this one may belong to this frame (even its first chunk),
   // so the frame can't be trusted to repair the screen.
   if (msg_loss_seq_ != frame_loss_seq_) frame_complete_ = false;
@@ -471,10 +529,14 @@ void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
     const bool valid = th.w != 0 && th.h != 0 && th.dlen != 0 &&
                        th.w <= display_width_ && th.h <= display_height_ &&
                        th.x < display_width_ && th.y < display_height_;
-    if (!valid || fi.enc != proto::Encoding::JPEG ||
-        !decode_jpeg_tile_to_lcd_((int16_t)th.x, (int16_t)th.y, data + off, th.dlen)) {
-      failed++;
+    bool ok = valid && fi.enc == proto::Encoding::JPEG;
+    if (ok) {
+      const int64_t t0 = esp_timer_get_time();
+      const uint32_t draw0 = ft_draw_us_;
+      ok = decode_jpeg_tile_to_lcd_((int16_t)th.x, (int16_t)th.y, data + off, th.dlen);
+      ft_decode_us_ += (uint32_t)(esp_timer_get_time() - t0) - (ft_draw_us_ - draw0);
     }
+    if (!ok) failed++;
 
     off += th.dlen;
   }
@@ -497,6 +559,22 @@ void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
 
     if (frame_failed_tiles_)
       ESP_LOGW(TAG, "frame %lu: %u of %u tiles failed", frame_id_, frame_failed_tiles_, frame_tiles_);
+
+    if (stats_interval_ms_) {
+      const uint32_t total_us = (uint32_t)(esp_timer_get_time() - ft_rx_start_us_);
+      st_.frames++;
+      if (frame_is_full_) st_.full_frames++;
+      st_.tiles += frame_tiles_;
+      st_.bytes += frame_bytes_;
+      st_.failed_tiles += frame_failed_tiles_;
+      st_.hw_fallback_tiles += frame_hw_fallback_tiles_;
+      st_.total_us += total_us;
+      if (total_us > st_.total_max_us) st_.total_max_us = total_us;
+      st_.rx_us += (uint64_t)(ft_rx_end_us_ - ft_rx_start_us_);
+      st_.queue_us += ft_queue_us_;
+      st_.decode_us += ft_decode_us_;
+      st_.draw_us += ft_draw_us_;
+    }
 
     // Per-tile reasons are logged at VERBOSE; warn about software fallback at most every 10 s.
     if (frame_hw_fallback_tiles_ && frame_start_us_ - last_hw_fallback_log_us_ >= 10ULL * 1000 * 1000) {
@@ -657,11 +735,13 @@ void RemoteWebView::draw_rgb565_clipped_(int x, int y, int w, int h, int stride,
   if (y + h > clip_y1) h = clip_y1 - y;
   if (w <= 0 || h <= 0) return;
 
+  const int64_t t0 = esp_timer_get_time();
   display_->draw_pixels_at(x, y, w, h, pixels,
                            esphome::display::COLOR_ORDER_RGB,
                            esphome::display::COLOR_BITNESS_565,
                            rgb565_big_endian_,
                            x_off, y_off, stride - x_off - w);
+  ft_draw_us_ += (uint32_t)(esp_timer_get_time() - t0);
 }
 
 bool RemoteWebView::ws_send_touch_event_(proto::TouchType type, int x, int y, uint8_t pid) {

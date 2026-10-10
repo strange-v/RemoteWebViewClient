@@ -21,6 +21,7 @@ CONF_MAX_BYTES_PER_MSG = "max_bytes_per_msg"
 CONF_BIG_ENDIAN = "big_endian"
 CONF_HW_DECODE = "hw_decode"
 CONF_HW_DECODE_TIMEOUT_MS = "hw_decode_timeout_ms"
+CONF_STATS_INTERVAL = "stats_interval"
 
 CONF_ON_FRAME_UPDATE = "on_frame_update"
 CONF_CURRENT_URL_SENSOR = "current_url_sensor"
@@ -77,6 +78,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_BIG_ENDIAN): cv.boolean,
         cv.Optional(CONF_HW_DECODE): cv.boolean,
         cv.Optional(CONF_HW_DECODE_TIMEOUT_MS): cv.positive_int,
+        cv.Optional(CONF_STATS_INTERVAL): cv.positive_time_period_milliseconds,
         cv.Optional(CONF_ROTATION): validate_rotation,
         cv.Optional(CONF_ON_FRAME_UPDATE): automation.validate_automation(
             {
@@ -140,6 +142,8 @@ async def to_code(config):
         cg.add(var.set_hw_decode(config[CONF_HW_DECODE]))
     if CONF_HW_DECODE_TIMEOUT_MS in config:
         cg.add(var.set_hw_decode_timeout_ms(config[CONF_HW_DECODE_TIMEOUT_MS]))
+    if CONF_STATS_INTERVAL in config:
+        cg.add(var.set_stats_interval(config[CONF_STATS_INTERVAL].total_milliseconds))
     if CONF_ROTATION in config:
         cg.add(var.set_rotation(config[CONF_ROTATION]))
 

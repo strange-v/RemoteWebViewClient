@@ -49,6 +49,7 @@ class RemoteWebView : public Component {
   void set_big_endian(bool v) { rgb565_big_endian_ = v; }
   void set_hw_decode(bool v) { hw_decode_ = v; }
   void set_hw_decode_timeout_ms(int v) { hw_decode_timeout_ms_ = v; }
+  void set_stats_interval(uint32_t ms) { stats_interval_ms_ = ms; }
   void set_rotation(int v) { rotation_ = v; }
   void disable_touch(bool disable);
   bool open_url(const std::string &s);
@@ -68,10 +69,21 @@ class RemoteWebView : public Component {
     size_t   len{0};
     void    *client{nullptr}; // opaque esp_websocket_client_handle_t
     uint32_t rx_loss_seq{0};  // value of rx_loss_seq_ when this message was enqueued
+    int64_t  rx_start_us{0};  // first fragment received
+    int64_t  enqueue_us{0};   // put into the decode queue
   };
   struct WsReasm {
     uint8_t *buf{nullptr};
     size_t total{0}, filled{0};
+    int64_t start_us{0};
+  };
+  // Performance stats accumulated over one stats_interval window (decode task only).
+  struct PerfStats {
+    uint32_t frames{0}, full_frames{0}, tiles{0};
+    uint32_t failed_tiles{0}, hw_fallback_tiles{0};
+    uint64_t bytes{0};
+    uint64_t total_us{0}, rx_us{0}, queue_us{0}, decode_us{0}, draw_us{0};
+    uint32_t total_max_us{0};
   };
 
   CallbackManager<void()> on_frame_update_callback_{};
@@ -136,6 +148,23 @@ class RemoteWebView : public Component {
   uint32_t frame_loss_seq_{0};     // stamp the current frame must keep to count as complete
   bool     frame_complete_{true};
   bool     frame_is_full_{false};
+
+  // Timing of the message being processed and of the current frame (decode task only).
+  int64_t  msg_rx_start_us_{0};
+  int64_t  msg_enqueue_us_{0};
+  int64_t  msg_dequeue_us_{0};
+  int64_t  ft_rx_start_us_{0};  // first byte of the frame's first message
+  int64_t  ft_rx_end_us_{0};    // last message of the frame enqueued
+  uint32_t ft_queue_us_{0};     // sum of queue waits of the frame's messages
+  uint32_t ft_decode_us_{0};    // JPEG decoding, excluding drawing
+  uint32_t ft_draw_us_{0};      // draw_pixels_at calls
+
+  uint32_t stats_interval_ms_{0};  // 0 = stats disabled
+  PerfStats st_{};
+  int64_t  st_window_start_us_{0};
+  uint32_t st_loss_seq_{0};
+  std::atomic<uint32_t> q_hwm_{0};            // max decode queue depth, WS client task
+  std::atomic<uint32_t> full_frame_reqs_{0};  // full-frame requests sent, rwv_ws
   uint32_t frame_stats_time_{0};
   uint32_t frame_stats_count_{0};
   size_t   frame_stats_bytes_{0};
@@ -192,6 +221,7 @@ class RemoteWebView : public Component {
   std::string get_url_() const;
   void set_url_(const std::string &url);
 
+  void maybe_report_stats_();
   bool screen_out_of_sync_() const;
   void note_rx_loss_();
   void note_decode_failure_();
