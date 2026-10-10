@@ -26,8 +26,9 @@ inline constexpr uint32_t ws_restart_after_us = 60u * 1000u * 1000u;
 // How long the WS handler waits for space in the decode queue before dropping a message.
 // While it waits the socket isn't read, so TCP flow control holds back the server, which
 // skips frames while the socket has unsent data. Dropping is the last resort (it triggers
-// a full-frame request). The handler runs without the client lock, so touch sends and
-// pings are not blocked by the wait.
+// a full-frame request). Newer esp_websocket_client versions call the handler with the
+// client lock held; sends don't wait on it because __init__.py enables
+// CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK.
 inline constexpr int decode_enqueue_timeout_ms = 1000;
 // Minimum interval between "decode queue full" log lines.
 inline constexpr int64_t drop_log_interval_us = 5 * 1000 * 1000;

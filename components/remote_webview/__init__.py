@@ -4,6 +4,7 @@ import esphome.config_validation as cv
 from esphome import automation
 from esphome.components import display, touchscreen, text_sensor
 from esphome.components.display import validate_rotation
+from esphome.components.esp32 import add_idf_sdkconfig_option
 from esphome.const import CONF_ID, CONF_DISPLAY_ID, CONF_URL, CONF_ROTATION, CONF_TRIGGER_ID
 
 
@@ -148,6 +149,11 @@ async def to_code(config):
         cg.add(var.set_rotation(config[CONF_ROTATION]))
 
     await cg.register_component(var, config)
+
+    # Newer esp_websocket_client versions run the DATA handler under the client lock, and the
+    # handler may wait up to 1 s for space in the decode queue. A separate TX lock keeps
+    # FrameAck, touch and keepalive sends from waiting on that.
+    add_idf_sdkconfig_option("CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK", True)
 
     for conf in config.get(CONF_ON_FRAME_UPDATE, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
