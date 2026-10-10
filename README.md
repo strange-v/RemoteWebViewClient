@@ -28,7 +28,6 @@ esp32:
   framework:
     type: esp-idf
     sdkconfig_options:
-      COMPILER_OPTIMIZATION_SIZE: y
       CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
@@ -151,6 +150,10 @@ remote_webview:
   full_frame_tile_count: 1
   max_bytes_per_msg: 61440
   jpeg_quality: 85
+  # ESP32-P4 only; both options are ignored on other targets.
+  hw_decode: true
+  hw_decode_timeout_ms: 200
+  
   on_frame_update:
     - logger.log: "The display just received a frame update!"
   current_url_sensor:
@@ -193,6 +196,7 @@ text:
 | `big_endian`            | bool      | ❌       | `true` or `false`                 | Use big-endian RGB565 pixel order for JPEG output (set false for little-endian panels). Default is `true`. |
 | `rotation`              | int       | ❌       | 0, 90, 180, 270                   | Enables software rotation for both the display and touchscreen. |
 | `on_frame_update`       | action    | ❌       | `- logger.log: "The display just received a frame update!"`  | Action that gets triggered each time the display updates (maximum of 1 trigger per second) |
+| `stats_interval`        | time      | ❌       | `10s`                             | Logs performance stats (fps, per-frame rx/queue/decode/draw time, queue depth, drops, touch-to-frame latency) at INFO level every interval. Disabled by default. |
 | `current_url_sensor`    | text_sensor | ❌      | `name: "Current URL"`            | Exposes the URL currently loaded in the server's headless browser as an ESPHome Text Sensor. Supports on_value automations. |
 
 
@@ -200,10 +204,14 @@ text:
 
 - **full_frame_tile_count** set to 1 is the most efficient way to do a full-screen update; use it if your network/device memory allows it.
 - **every_nth_frame** must be 1 if you don’t want to miss changes (though increasing it may reduce server load). I recommend keeping it set to 1.
-- **min_frame_interval** should be slightly larger than the render time reported by the self-test (set `self-test` as a url parameter in the YAML).
+- **wifi power_save_mode** — for maximum responsiveness, set `power_save_mode: none` in the `wifi:` section. ESPHome's default power saving lets the radio sleep between packets, which lowers power draw but adds latency: in testing on an ESP32-S3 it added ~30 ms to every update, cut throughput from ~1.6 MB/s to ~330 KB/s and made a full-screen change take 154 ms instead of 88 ms. Keep the default if power draw or Wi-Fi coexistence matters more than speed. The self-test shows the effect ("Wi-Fi: … ms per update").
+- **min_frame_interval** caps how often the server sends frames. It protects the device from frames arriving faster than it can decode them (e.g. while scrolling), so it should be at least the device's decode time for a full-screen frame. Run the self-test (`url: "self-test"`): it measures that time and recommends a value.
 - **max_bytes_per_msg** should be larger than your maximum tile size (full-frame or partial).
 - **jpeg_quality** — lower values encode faster and reduce bandwidth (but increase artifacts). Start at **85**, drop toward **70–75** if you need speed.
 - **big_endian** — defaults to **true**. If colors look wrong (swapped/tinted), set `big_endian: false` for panels that require little-endian RGB565.
+- **hw_decode** — ESP32-P4 only; defaults to **true**. Set to `false` to use the software JPEG decoder.
+- **hw_decode_timeout_ms** — ESP32-P4 only; defaults to **200**. Timeout passed to the hardware JPEG decoder engine.
+- **Display ownership** — `remote_webview` draws from its own task, so nothing else may draw to the same display: use `update_interval: never`, no `lambda`/`pages`, `auto_clear_enabled: false`, `show_test_card: false`, and don't call `component.update` on it. Prefer a touchscreen on a separate bus (e.g. I2C) rather than sharing the display's SPI bus.
 - **Red tile / red screen** — this indicates a tile payload exceeded `max_bytes_per_msg`. Increase `max_bytes_per_msg` or reduce tile size/JPEG quality so each tile fits.
 
 ## On-screen keyboard
