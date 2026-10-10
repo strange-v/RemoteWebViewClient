@@ -195,6 +195,7 @@ text:
 | `max_bytes_per_msg`     | int (B)   | ❌       | `14336` or `61440`                | Upper bound for a single WS binary message. |
 | `big_endian`            | bool      | ❌       | `true` or `false`                 | Use big-endian RGB565 pixel order for JPEG output (set false for little-endian panels). Default is `true`. |
 | `rotation`              | int       | ❌       | 0, 90, 180, 270                   | Enables software rotation for both the display and touchscreen. |
+| `scale`                 | float     | ❌       | `1.5`                             | Page zoom (0.5–4). The page is laid out at the display size divided by the scale and rendered at that device scale factor, so text and controls get bigger. For sharp output the server needs `MAX_DEVICE_SCALE_FACTOR` at least this value. |
 | `on_frame_update`       | action    | ❌       | `- logger.log: "The display just received a frame update!"`  | Action that gets triggered each time the display updates (maximum of 1 trigger per second) |
 | `stats_interval`        | time      | ❌       | `10s`                             | Logs performance stats (fps, per-frame rx/queue/decode/draw time, queue depth, drops, touch-to-frame latency) at INFO level every interval. Disabled by default. |
 | `current_url_sensor`    | text_sensor | ❌      | `name: "Current URL"`            | Exposes the URL currently loaded in the server's headless browser as an ESPHome Text Sensor. Supports on_value automations. |
