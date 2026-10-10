@@ -197,7 +197,7 @@ text:
 | `big_endian`            | bool      | ❌       | `true` or `false`                 | Use big-endian RGB565 pixel order for JPEG output (set false for little-endian panels). Default is `true`. |
 | `rotation`              | int       | ❌       | 0, 90, 180, 270                   | Enables software rotation for both the display and touchscreen. |
 | `on_frame_update`       | action    | ❌       | `- logger.log: "The display just received a frame update!"`  | Action that gets triggered each time the display updates (maximum of 1 trigger per second) |
-| `stats_interval`        | time      | ❌       | `10s`                             | Logs performance stats (fps, per-frame rx/queue/decode/draw time, queue depth, drops) at INFO level every interval. Disabled by default. |
+| `stats_interval`        | time      | ❌       | `10s`                             | Logs performance stats (fps, per-frame rx/queue/decode/draw time, queue depth, drops, touch-to-frame latency) at INFO level every interval. Disabled by default. |
 | `current_url_sensor`    | text_sensor | ❌      | `name: "Current URL"`            | Exposes the URL currently loaded in the server's headless browser as an ESPHome Text Sensor. Supports on_value automations. |
 
 

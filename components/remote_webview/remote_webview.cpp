@@ -428,8 +428,37 @@ void RemoteWebView::decode_task_tramp_(void *arg) {
   }
 }
 
+void RemoteWebView::touch_latency_poll_(int64_t now) {
+  const int64_t up = touch_up_us_.load();
+  if (up != tl_seen_up_us_) {
+    // New touch: close the previous one and start tracking this one.
+    if (tl_touch_us_) touch_latency_finish_();
+    tl_seen_up_us_ = up;
+    tl_touch_us_ = up;
+    tl_first_us_ = 0;
+    tl_largest_us_ = 0;
+    tl_largest_bytes_ = 0;
+  } else if (tl_touch_us_ && now - tl_touch_us_ >= cfg::touch_latency_window_us) {
+    touch_latency_finish_();
+  }
+}
+
+void RemoteWebView::touch_latency_finish_() {
+  st_.touches++;
+  if (tl_first_us_) {
+    st_.touch_first_us += (uint64_t)tl_first_us_;
+    st_.touch_largest_us += (uint64_t)tl_largest_us_;
+    st_.touch_first_max_us = std::max(st_.touch_first_max_us, (uint32_t)tl_first_us_);
+    st_.touch_largest_max_us = std::max(st_.touch_largest_max_us, (uint32_t)tl_largest_us_);
+  } else {
+    st_.touches_no_frame++;
+  }
+  tl_touch_us_ = 0;
+}
+
 void RemoteWebView::maybe_report_stats_() {
   const int64_t now = esp_timer_get_time();
+  touch_latency_poll_(now);
   if (st_window_start_us_ == 0) {
     st_window_start_us_ = now;
     st_loss_seq_ = rx_loss_seq_.load();
@@ -447,7 +476,7 @@ void RemoteWebView::maybe_report_stats_() {
   st_window_start_us_ = now;
   st_loss_seq_ = loss_seq;
 
-  if (s.frames == 0 && dropped == 0 && reqs == 0) return;  // idle window
+  if (s.frames == 0 && dropped == 0 && reqs == 0 && s.touches == 0) return;  // idle window
 
   const float secs = (float)elapsed_us / 1e6f;
   const float n = s.frames ? (float)s.frames : 1.0f;
@@ -462,6 +491,15 @@ void RemoteWebView::maybe_report_stats_() {
   ESP_LOGI(TAG, "  queue max %u/%d, dropped %u, failed tiles %u, hw fallback tiles %u, full-frame requests %u",
            (unsigned)q_max, cfg::decode_queue_depth, (unsigned)dropped, (unsigned)s.failed_tiles,
            (unsigned)s.hw_fallback_tiles, (unsigned)reqs);
+
+  if (s.touches) {
+    const uint32_t answered = s.touches - s.touches_no_frame;
+    const float a = answered ? (float)answered : 1.0f;
+    ESP_LOGI(TAG, "  touch->frame: %u touches, first avg %.1f ms (max %.1f), largest avg %.1f ms (max %.1f), no frame %u",
+             (unsigned)s.touches, s.touch_first_us / a / 1000.0f, s.touch_first_max_us / 1000.0f,
+             s.touch_largest_us / a / 1000.0f, s.touch_largest_max_us / 1000.0f,
+             (unsigned)s.touches_no_frame);
+  }
 }
 
 void RemoteWebView::process_packet_(void * /*client*/, const uint8_t *data, size_t len) {
@@ -574,6 +612,18 @@ void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
       st_.queue_us += ft_queue_us_;
       st_.decode_us += ft_decode_us_;
       st_.draw_us += ft_draw_us_;
+
+      const int64_t now = esp_timer_get_time();
+      touch_latency_poll_(now);
+      // Only frames that started arriving after the touch can be its response.
+      if (tl_touch_us_ && ft_rx_start_us_ >= tl_touch_us_) {
+        const int64_t latency = now - tl_touch_us_;
+        if (!tl_first_us_) tl_first_us_ = latency;
+        if (frame_bytes_ > tl_largest_bytes_) {
+          tl_largest_bytes_ = frame_bytes_;
+          tl_largest_us_ = latency;
+        }
+      }
     }
 
     // Per-tile reasons are logged at VERBOSE; warn about software fallback at most every 10 s.
@@ -754,7 +804,10 @@ bool RemoteWebView::ws_send_touch_event_(proto::TouchType type, int x, int y, ui
   uint8_t pkt[sizeof(proto::TouchPacket)];
   const size_t n = proto::build_touch_packet(type, pid, x, y, pkt);
 
-  return ws_send_bin_(pkt, n, pdMS_TO_TICKS(10), pdMS_TO_TICKS(50));
+  const bool ok = ws_send_bin_(pkt, n, pdMS_TO_TICKS(10), pdMS_TO_TICKS(50));
+  if (ok && type == proto::TouchType::Up && stats_interval_ms_)
+    touch_up_us_.store(esp_timer_get_time());
+  return ok;
 }
 
 bool RemoteWebView::ws_send_open_url_(const char *url, uint16_t flags) {

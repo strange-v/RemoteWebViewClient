@@ -84,6 +84,10 @@ class RemoteWebView : public Component {
     uint64_t bytes{0};
     uint64_t total_us{0}, rx_us{0}, queue_us{0}, decode_us{0}, draw_us{0};
     uint32_t total_max_us{0};
+    // touch Up -> frame drawn
+    uint32_t touches{0}, touches_no_frame{0};
+    uint64_t touch_first_us{0}, touch_largest_us{0};
+    uint32_t touch_first_max_us{0}, touch_largest_max_us{0};
   };
 
   CallbackManager<void()> on_frame_update_callback_{};
@@ -165,6 +169,15 @@ class RemoteWebView : public Component {
   uint32_t st_loss_seq_{0};
   std::atomic<uint32_t> q_hwm_{0};            // max decode queue depth, WS client task
   std::atomic<uint32_t> full_frame_reqs_{0};  // full-frame requests sent, rwv_ws
+
+  // Touch-to-frame latency: the main loop stamps each touch Up sent; the decode task
+  // tracks frames that started arriving after it, within cfg::touch_latency_window_us.
+  std::atomic<int64_t> touch_up_us_{0};
+  int64_t  tl_seen_up_us_{0};   // last touch Up picked up by the decode task
+  int64_t  tl_touch_us_{0};     // touch being tracked, 0 = none
+  int64_t  tl_first_us_{0};     // latency to the first frame, 0 = none yet
+  int64_t  tl_largest_us_{0};   // latency to the largest frame
+  size_t   tl_largest_bytes_{0};
   uint32_t frame_stats_time_{0};
   uint32_t frame_stats_count_{0};
   size_t   frame_stats_bytes_{0};
@@ -222,6 +235,8 @@ class RemoteWebView : public Component {
   void set_url_(const std::string &url);
 
   void maybe_report_stats_();
+  void touch_latency_poll_(int64_t now);
+  void touch_latency_finish_();
   bool screen_out_of_sync_() const;
   void note_rx_loss_();
   void note_decode_failure_();

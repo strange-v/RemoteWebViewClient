@@ -18,6 +18,8 @@ inline constexpr int ws_init_retry_ms = 5000;
 // Restart the client if auto-reconnect has not succeeded for this long.
 inline constexpr uint32_t ws_restart_after_us = 60u * 1000u * 1000u;
 
+// Frames finishing this long after a touch Up count towards touch-to-frame latency stats.
+inline constexpr int64_t touch_latency_window_us = 2 * 1000 * 1000;
 // Minimum interval between full-frame requests while the screen is out of sync.
 inline constexpr int64_t full_frame_request_interval_us = 2 * 1000 * 1000;
 
