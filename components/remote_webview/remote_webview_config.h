@@ -10,7 +10,9 @@ inline constexpr int decode_task_stack = 32 * 1024;
 inline constexpr int decode_task_prio = 1;
 inline constexpr int ws_task_stack = 8 * 1024;
 inline constexpr int ws_task_prio = 5;
-inline constexpr int decode_queue_depth = 12;
+// Kept short so a slow decoder fills the queue quickly and backpressure reaches the server
+// (via TCP flow control) before stale frames pile up on the device.
+inline constexpr int decode_queue_depth = 4;
 
 inline constexpr size_t ws_max_message_bytes = 64 * 1024;
 inline constexpr size_t ws_buffer_size = 30 * 1024;
