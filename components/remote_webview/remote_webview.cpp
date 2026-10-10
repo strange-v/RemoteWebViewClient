@@ -596,6 +596,13 @@ void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
   }
 
   if (fi.flags & proto::kFlafLastOfFrame) {
+    // "Done with this frame" (drawn or not), sent first so the server can pace the next one.
+    // Short timeouts keep decoding from blocking; a lost ack is covered by the next one
+    // (acks are cumulative) or by the server's timeout.
+    uint8_t ack[sizeof(proto::FrameAckPacket)];
+    const size_t ack_len = proto::build_frame_ack_packet(fi.frame_id, ack);
+    ws_send_bin_(ack, ack_len, pdMS_TO_TICKS(10), pdMS_TO_TICKS(50));
+
     const uint32_t time_ms = (esp_timer_get_time() - frame_start_us_) / 1000ULL;
     frame_stats_bytes_ += frame_bytes_;
     frame_stats_time_ += time_ms;

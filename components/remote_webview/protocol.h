@@ -9,7 +9,7 @@ constexpr uint8_t kProtocolVersion = 1;
 constexpr uint8_t kFlafLastOfFrame = 1u<<0;
 constexpr uint8_t kFlagIsFullFrame = 1u<<1;
 
-enum class MsgType   : uint8_t { Unknown = 0, Frame = 1, Touch = 2, FrameStats = 3, OpenURL = 4, Keepalive = 5, CurrentURL = 6, RequestFullFrame = 7 };
+enum class MsgType   : uint8_t { Unknown = 0, Frame = 1, Touch = 2, FrameStats = 3, OpenURL = 4, Keepalive = 5, CurrentURL = 6, RequestFullFrame = 7, FrameAck = 8 };
 enum class Encoding  : uint8_t { Unknown = 0, PNG = 1, JPEG = 2, RAW565 = 3, RAW565_RLE = 4, RAW565_LZ4 = 5 };
 enum class TouchType : uint8_t { Unknown = 0, Down = 1, Move = 2, Up = 3 };
 
@@ -88,6 +88,16 @@ struct RWV_PACKED RequestFullFramePacket {
   uint8_t ver;
 };
 static_assert(sizeof(RequestFullFramePacket) == 2, "RequestFullFramePacket wire size must be 2");
+
+// [type:1][ver:1][frame_id:4] => 6 bytes
+// Sent after the client finished a frame (drawn or not). Cumulative: acknowledges every frame
+// up to frame_id; the server uses it to keep only a couple of frames in flight.
+struct RWV_PACKED FrameAckPacket {
+  MsgType type;
+  uint8_t ver;
+  uint32_t frame_id;
+};
+static_assert(sizeof(FrameAckPacket) == 6, "FrameAckPacket wire size must be 6");
 
 #if !defined(__GNUC__)
   #pragma pack(pop)
@@ -199,6 +209,17 @@ inline size_t build_request_full_frame_packet(uint8_t *out) {
   pkt.ver  = kProtocolVersion;
   memcpy(out, &pkt, sizeof(pkt));
   return sizeof(pkt);
+}
+
+inline size_t build_frame_ack_packet(uint32_t frame_id, uint8_t *out) {
+  if (!out) return 0;
+  out[0] = (uint8_t)MsgType::FrameAck;
+  out[1] = kProtocolVersion;
+  out[2] = (uint8_t)frame_id;
+  out[3] = (uint8_t)(frame_id >> 8);
+  out[4] = (uint8_t)(frame_id >> 16);
+  out[5] = (uint8_t)(frame_id >> 24);
+  return sizeof(FrameAckPacket);
 }
 
 } // namespace esphome::remote_webview::proto
