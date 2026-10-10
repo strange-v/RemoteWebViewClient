@@ -13,6 +13,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <algorithm>
+
 namespace esphome {
 namespace remote_webview {
 
@@ -38,7 +40,7 @@ void RemoteWebView::process_current_url_packet_(const uint8_t *data, size_t len)
   if (!data || len < sizeof(proto::CurrentURLHeader)) return;
   
   auto *hdr = reinterpret_cast<const proto::CurrentURLHeader *>(data);
-  if (sizeof(proto::CurrentURLHeader) + hdr->url_len > len) return;
+  if (hdr->url_len > len - sizeof(proto::CurrentURLHeader)) return;
   
   if (this->url_sensor_ == nullptr) return;
 
@@ -57,17 +59,12 @@ std::string RemoteWebView::get_current_url() const {
   return "";
 }
 
-static inline void websocket_force_reconnect(esp_websocket_client_handle_t client) {
-  if (!client) return;
-  esp_websocket_client_stop(client);
-  esp_websocket_client_start(client);
-}
-
 void RemoteWebView::setup() {
   self_ = this;
 
   if (!display_) {
     ESP_LOGE(TAG, "no display");
+    this->mark_failed();
     return;
   }
 
@@ -77,14 +74,10 @@ void RemoteWebView::setup() {
   q_decode_ = xQueueCreate(cfg::decode_queue_depth, sizeof(WsMsg));
   ws_send_mtx_ = xSemaphoreCreateMutex();
   state_mtx_ = xSemaphoreCreateMutex();
-
-  start_decode_task_();
-  start_ws_task_();
-
-  if (touch_) {
-    touch_listener_ = new RemoteWebViewTouchListener(this);
-    touch_->register_listener(touch_listener_);
-    ESP_LOGD(TAG, "touch listener registered");
+  if (!q_decode_ || !ws_send_mtx_ || !state_mtx_) {
+    ESP_LOGE(TAG, "failed to create queue/mutexes");
+    this->mark_failed();
+    return;
   }
 
 #if REMOTE_WEBVIEW_HW_JPEG
@@ -120,11 +113,24 @@ void RemoteWebView::setup() {
       jpeg_del_decoder_engine(hw_dec_);
       hw_dec_ = nullptr;
     } else {
-      ESP_LOGD(TAG, "HW decoder buffers allocated: input=%u, output=%u", 
+      ESP_LOGD(TAG, "HW decoder buffers allocated: input=%u, output=%u",
                (unsigned)hw_decode_input_size_, (unsigned)hw_decode_output_size_);
     }
   }
 #endif
+
+  // Start tasks only after everything they use (incl. HW decoder) is initialized.
+  if (!start_decode_task_() || !start_ws_task_()) {
+    ESP_LOGE(TAG, "failed to create tasks");
+    this->mark_failed();
+    return;
+  }
+
+  if (touch_) {
+    touch_listener_ = new RemoteWebViewTouchListener(this);
+    touch_->register_listener(touch_listener_);
+    ESP_LOGD(TAG, "touch listener registered");
+  }
 }
 
 void RemoteWebView::loop() {
@@ -167,7 +173,7 @@ void RemoteWebView::dump_config() {
 #endif
 
   ESP_LOGCONFIG(TAG, "  server: %s:%d", server_host_.c_str(), server_port_);
-  ESP_LOGCONFIG(TAG, "  url: %s", url_.c_str());
+  ESP_LOGCONFIG(TAG, "  url: %s", get_url_().c_str());
 
   auto print_opt_int = [&](const char *name, int v) {
     if (v >= 0) ESP_LOGCONFIG(TAG, "  %s: %d", name, v);
@@ -191,11 +197,8 @@ void RemoteWebView::dump_config() {
 bool RemoteWebView::open_url(const std::string &s) {
   if (s.empty()) return false;
   
-  if (!ws_client_ || !esp_websocket_client_is_connected(ws_client_))
-    return false;
-  
   if (ws_send_open_url_(s.c_str(), 0)) {
-    url_ = s;
+    set_url_(s);
     ESP_LOGD(TAG, "opened URL: %s", s.c_str());
     return true;
   }
@@ -203,8 +206,8 @@ bool RemoteWebView::open_url(const std::string &s) {
   return false;
 }
 
-void RemoteWebView::start_ws_task_() {
-  xTaskCreatePinnedToCore(&RemoteWebView::ws_task_tramp_, "rwv_ws", cfg::ws_task_stack, this, 5, &t_ws_, 0);
+bool RemoteWebView::start_ws_task_() {
+  return xTaskCreatePinnedToCore(&RemoteWebView::ws_task_tramp_, "rwv_ws", cfg::ws_task_stack, this, 5, &t_ws_, 0) == pdPASS;
 }
 
 void RemoteWebView::ws_task_tramp_(void *arg) {
@@ -213,32 +216,65 @@ void RemoteWebView::ws_task_tramp_(void *arg) {
   std::string uri_str = self->build_ws_uri_();
   esp_websocket_client_config_t cfg_ws = {};
   cfg_ws.uri = uri_str.c_str();
-  cfg_ws.reconnect_timeout_ms = 2000;
-  cfg_ws.network_timeout_ms   = 10000;
+  cfg_ws.reconnect_timeout_ms = cfg::ws_reconnect_timeout_ms;
+  cfg_ws.network_timeout_ms   = cfg::ws_network_timeout_ms;
   cfg_ws.task_stack           = cfg::ws_task_stack;
   cfg_ws.task_prio            = cfg::ws_task_prio;
   cfg_ws.buffer_size          = cfg::ws_buffer_size;
   cfg_ws.disable_auto_reconnect = false;
 
   WsReasm reasm{};
-  esp_websocket_client_handle_t client = esp_websocket_client_init(&cfg_ws);
-  ESP_ERROR_CHECK(esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, ws_event_handler_, &reasm));
-  ESP_ERROR_CHECK(esp_websocket_client_start(client));
-
+  esp_websocket_client_handle_t client = nullptr;
   for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    client = esp_websocket_client_init(&cfg_ws);
+    if (client) {
+      esp_err_t err = esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, ws_event_handler_, &reasm);
+      if (err == ESP_OK) err = esp_websocket_client_start(client);
+      if (err == ESP_OK) break;
+      ESP_LOGE(TAG, "[ws] client start failed: %s", esp_err_to_name(err));
+      esp_websocket_client_destroy(client);
+      client = nullptr;
+    } else {
+      ESP_LOGE(TAG, "[ws] client init failed");
+    }
+    vTaskDelay(pdMS_TO_TICKS(cfg::ws_init_retry_ms));
+  }
+
+  // Reconnects are handled by the client's built-in auto-reconnect. This loop only restarts
+  // the client if it has been stuck disconnected for much longer than a normal reconnect cycle.
+  int64_t connected_seen_us = esp_timer_get_time();
+  for (;;) {
+    // Woken early by notify_ws_task_() when the screen goes out of sync.
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
+    const int64_t now_us = esp_timer_get_time();
 
     if (!esp_websocket_client_is_connected(client)) {
-      websocket_force_reconnect(client);
+      if (now_us - connected_seen_us >= (int64_t)cfg::ws_restart_after_us) {
+        ESP_LOGW(TAG, "[ws] not connected for %u s, restarting client",
+                 (unsigned)(cfg::ws_restart_after_us / 1000000));
+        esp_websocket_client_stop(client);
+        const esp_err_t err = esp_websocket_client_start(client);
+        if (err != ESP_OK)
+          ESP_LOGE(TAG, "[ws] client restart failed: %s", esp_err_to_name(err));
+        connected_seen_us = now_us;
+      }
       continue;
     }
+    connected_seen_us = now_us;
 
-    if (self && self->ws_client_ && esp_websocket_client_is_connected(self->ws_client_)) {
-      const uint64_t now = esp_timer_get_time();
-      if (now - self->last_keepalive_us_ >= cfg::ws_keepalive_interval_us) {
+    if (self && self->connected_client_()) {
+      if (now_us - self->last_keepalive_us_.load() >= (int64_t)cfg::ws_keepalive_interval_us) {
         if (self->ws_send_keepalive_()) {
-          self->last_keepalive_us_ = now;
+          self->last_keepalive_us_.store(now_us);
           ESP_LOGV(TAG, "[ws] keepalive sent");
+        }
+      }
+
+      if (self->screen_out_of_sync_() &&
+          now_us - self->last_full_frame_req_us_.load() >= cfg::full_frame_request_interval_us) {
+        if (self->ws_send_request_full_frame_()) {
+          self->last_full_frame_req_us_.store(now_us);
+          ESP_LOGD(TAG, "[ws] screen out of sync, full frame requested");
         }
       }
     }
@@ -256,30 +292,34 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
 
   switch (event_id) {
     case WEBSOCKET_EVENT_CONNECTED:
-      if (self_) self_->ws_client_ = e->client;
       ESP_LOGI(TAG, "[ws] connected");
-      
-      if (self_) self_->last_keepalive_us_ = esp_timer_get_time();
-      if (self_ && !self_->url_.empty()) {
-        self_->ws_send_open_url_(self_->url_.c_str(), 0);
+      if (self_) {
+        self_->ws_client_.store(e->client);
+        self_->last_keepalive_us_.store(esp_timer_get_time());
+        // The server sends a full frame on connect; don't request another one right away.
+        self_->last_full_frame_req_us_.store(esp_timer_get_time());
+        const std::string url = self_->get_url_();
+        if (!url.empty())
+          self_->ws_send_open_url_(url.c_str(), 0);
       }
       break;
 
     case WEBSOCKET_EVENT_DISCONNECTED:
-      if (self_) self_->ws_client_ = nullptr;
+      if (self_) self_->ws_client_.store(nullptr);
       ESP_LOGI(TAG, "[ws] disconnected");
-      if (self_) self_->last_keepalive_us_ = 0; 
+      if (self_) self_->last_keepalive_us_.store(0);
+      if (r->buf && self_) self_->note_rx_loss_();
       reasm_reset_(*r);
-      websocket_force_reconnect(e->client);
+      // Auto-reconnect is enabled; esp_websocket_client_stop() must not be called from this handler.
       break;
 
 #ifdef WEBSOCKET_EVENT_CLOSED
     case WEBSOCKET_EVENT_CLOSED:
-      if (self_) self_->ws_client_ = nullptr;
+      if (self_) self_->ws_client_.store(nullptr);
       ESP_LOGI(TAG, "[ws] closed");
-      if (self_) self_->last_keepalive_us_ = 0; 
+      if (self_) self_->last_keepalive_us_.store(0);
+      if (r->buf && self_) self_->note_rx_loss_();
       reasm_reset_(*r);
-      websocket_force_reconnect(e->client);
       break;
 #endif
 
@@ -291,25 +331,39 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
       bool is_bin  = (e->op_code == WS_TRANSPORT_OPCODES_BINARY);
       if (!is_bin) break;
 
+      // Every message that doesn't reach the decode queue is counted as a loss (note_rx_loss_),
+      // which triggers a full-frame request. Later fragments of a dropped message are skipped
+      // by the `!r->buf` check below and are not counted again.
       if (e->payload_offset == 0) {
+        if (r->buf) {
+          ESP_LOGE(TAG, "incomplete WS message discarded");
+          self_->note_rx_loss_();
+        }
         reasm_reset_(*r);
-        const size_t max_allowed = (self_ && self_->max_bytes_per_msg_ > 0) 
-                                   ? (size_t)self_->max_bytes_per_msg_ 
+        const size_t max_allowed = (self_ && self_->max_bytes_per_msg_ > 0)
+                                   ? (size_t)self_->max_bytes_per_msg_
                                    : cfg::ws_max_message_bytes;
         if ((size_t)e->payload_len > max_allowed) {
           ESP_LOGE(TAG, "WS message too large: %u > %u", (unsigned)e->payload_len, (unsigned)max_allowed);
+          self_->note_rx_loss_();
           break;
         }
         r->total = (size_t)e->payload_len;
         r->buf   = (uint8_t *)heap_caps_malloc(r->total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!r->buf) r->buf = (uint8_t *)heap_caps_malloc(r->total, MALLOC_CAP_8BIT);
-        if (!r->buf) { ESP_LOGE(TAG, "malloc %u failed", (unsigned)r->total); r->total = 0; break; }
+        if (!r->buf) {
+          ESP_LOGE(TAG, "malloc %u failed", (unsigned)r->total);
+          r->total = 0;
+          self_->note_rx_loss_();
+          break;
+        }
       }
       if (!r->buf || r->total == 0) break;
 
       if ((size_t)e->payload_offset + frag_len > r->total) {
         ESP_LOGE(TAG, "bad fragment bounds");
         reasm_reset_(*r);
+        self_->note_rx_loss_();
         break;
       }
       memcpy(r->buf + e->payload_offset, frag, frag_len);
@@ -319,10 +373,12 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
       if (r->filled == r->total) {
         WsMsg m;
         m.buf = r->buf; m.len = r->total; m.client = e->client;
+        m.rx_loss_seq = self_->rx_loss_seq_.load();
         r->buf = nullptr; r->total = 0; r->filled = 0;
         if (!self_->q_decode_ || xQueueSend(self_->q_decode_, &m, 0) != pdTRUE) {
           ESP_LOGE(TAG, "decode queue full, dropping packet");
           free(m.buf);
+          self_->note_rx_loss_();
         }
       }
       break;
@@ -339,8 +395,8 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
   }
 }
 
-void RemoteWebView::start_decode_task_() {
-  xTaskCreatePinnedToCore(&RemoteWebView::decode_task_tramp_, "rwv_decode", cfg::decode_task_stack, this, 6, &t_decode_, 1);
+bool RemoteWebView::start_decode_task_() {
+  return xTaskCreatePinnedToCore(&RemoteWebView::decode_task_tramp_, "rwv_decode", cfg::decode_task_stack, this, 6, &t_decode_, 1) == pdPASS;
 }
 
 void RemoteWebView::decode_task_tramp_(void *arg) {
@@ -348,7 +404,9 @@ void RemoteWebView::decode_task_tramp_(void *arg) {
   WsMsg m;
   for (;;) {
     if (xQueueReceive(self->q_decode_, &m, portMAX_DELAY) == pdTRUE) {
+      self->msg_loss_seq_ = m.rx_loss_seq;
       self->process_packet_(m.client, m.buf, m.len);
+      self->prev_msg_loss_seq_ = m.rx_loss_seq;
       free(m.buf);
     }
   }
@@ -376,36 +434,57 @@ void RemoteWebView::process_packet_(void * /*client*/, const uint8_t *data, size
 
 void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
 {
-  if (!data || len < sizeof(proto::FrameHeader)) return;
-
   proto::FrameInfo fi{};
   size_t off = 0;
-  if (!proto::parse_frame_header(data, len, fi, off)) return;
+  if (!data || !proto::parse_frame_header(data, len, fi, off)) {
+    ESP_LOGE(TAG, "invalid frame header (len=%u)", (unsigned)len);
+    frame_complete_ = false;
+    note_decode_failure_();
+    return;
+  }
 
   if (fi.frame_id != frame_id_) {
     frame_id_ = fi.frame_id;
     frame_tiles_= 0;
+    frame_failed_tiles_ = 0;
     frame_bytes_= 0;
     frame_start_us_ = esp_timer_get_time();
+    frame_is_full_ = (fi.flags & proto::kFlagIsFullFrame) != 0;
+    frame_loss_seq_ = prev_msg_loss_seq_;
+    frame_complete_ = true;
   }
+  // A message lost right before this one may belong to this frame (even its first chunk),
+  // so the frame can't be trusted to repair the screen.
+  if (msg_loss_seq_ != frame_loss_seq_) frame_complete_ = false;
+
   frame_bytes_ += len;
   frame_tiles_ += fi.tile_count;
 
-  for (uint16_t i = 0; i < fi.tile_count; i++) {
+  uint16_t failed = 0;
+  uint16_t i = 0;
+  for (; i < fi.tile_count; i++) {
     proto::TileHeader th{};
-    if (!proto::parse_tile_header(data, len, th, off)) return;
-    if (off + th.dlen > len) return;
+    if (!proto::parse_tile_header(data, len, th, off)) break;
+    if (th.dlen > len - off) break;
 
-    if (th.w == 0 || th.h == 0 || th.w > display_width_ || th.h > display_height_) {
-      off += th.dlen;
-      continue;
+    const bool valid = th.w != 0 && th.h != 0 && th.dlen != 0 &&
+                       th.w <= display_width_ && th.h <= display_height_ &&
+                       th.x < display_width_ && th.y < display_height_;
+    if (!valid || fi.enc != proto::Encoding::JPEG ||
+        !decode_jpeg_tile_to_lcd_((int16_t)th.x, (int16_t)th.y, data + off, th.dlen)) {
+      failed++;
     }
 
-    if (fi.enc == proto::Encoding::JPEG && th.dlen) {
-      decode_jpeg_tile_to_lcd_((int16_t)th.x, (int16_t)th.y, data + off, th.dlen);
-    }
-    
     off += th.dlen;
+  }
+  if (i < fi.tile_count) {
+    ESP_LOGE(TAG, "frame %lu: truncated packet, parsed %u of %u tiles", frame_id_, i, fi.tile_count);
+    failed += fi.tile_count - i;
+  }
+  if (failed) {
+    frame_failed_tiles_ += failed;
+    frame_complete_ = false;
+    note_decode_failure_();
   }
 
   if (fi.flags & proto::kFlafLastOfFrame) {
@@ -415,8 +494,37 @@ void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
     frame_stats_count_++;
     ESP_LOGD(TAG, "frame %lu: tiles %u (%u bytes) - %lu ms", frame_id_, frame_tiles_, frame_bytes_, time_ms);
 
-    this->frame_update_pending_.store(true, std::memory_order_release);
+    if (frame_failed_tiles_)
+      ESP_LOGW(TAG, "frame %lu: %u of %u tiles failed", frame_id_, frame_failed_tiles_, frame_tiles_);
+
+    if (frame_is_full_ && frame_complete_) {
+      // Repairs every loss stamped up to the start of this frame. Losses after it keep
+      // rx_loss_seq_ ahead of repaired_loss_seq_ and trigger another request.
+      decode_dirty_.store(false);
+      repaired_loss_seq_.store(frame_loss_seq_);
+    }
+
+    if (frame_failed_tiles_ == 0)
+      this->frame_update_pending_.store(true, std::memory_order_release);
   }
+}
+
+bool RemoteWebView::screen_out_of_sync_() const {
+  return decode_dirty_.load() || rx_loss_seq_.load() != repaired_loss_seq_.load();
+}
+
+void RemoteWebView::note_rx_loss_() {
+  rx_loss_seq_.fetch_add(1);
+  notify_ws_task_();
+}
+
+void RemoteWebView::note_decode_failure_() {
+  decode_dirty_.store(true);
+  notify_ws_task_();
+}
+
+void RemoteWebView::notify_ws_task_() {
+  if (t_ws_) xTaskNotifyGive(t_ws_);
 }
 
 void RemoteWebView::process_frame_stats_packet_(const uint8_t *data, size_t len)
@@ -433,12 +541,7 @@ void RemoteWebView::process_frame_stats_packet_(const uint8_t *data, size_t len)
   frame_stats_count_ = 0;
   frame_stats_bytes_ = 0;
 
-  const TickType_t to = pdMS_TO_TICKS(50);
-  if (xSemaphoreTake(ws_send_mtx_, to) != pdTRUE)
-    return;
-
-  esp_websocket_client_send_bin(ws_client_, (const char*)pkt, (int)n, to);
-  xSemaphoreGive(ws_send_mtx_);
+  ws_send_bin_(pkt, n, pdMS_TO_TICKS(50), pdMS_TO_TICKS(50));
 }
 
 bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const uint8_t *data, size_t len) {
@@ -487,10 +590,9 @@ bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const
       return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
     }
 
-    display_->draw_pixels_at(dst_x, dst_y, (int)hdr.width, (int)hdr.height, hw_decode_output_buf_,
-        esphome::display::COLOR_ORDER_RGB,
-        esphome::display::COLOR_BITNESS_565,
-        rgb565_big_endian_);
+    draw_rgb565_clipped_(dst_x, dst_y, (int)hdr.width, (int)hdr.height, aligned_w, hw_decode_output_buf_,
+                         std::min<int>(dst_x + (int)hdr.width, display_width_),
+                         std::min<int>(dst_y + (int)hdr.height, display_height_));
 
     return true;
   }
@@ -508,6 +610,10 @@ bool RemoteWebView::decode_jpeg_tile_software_(int16_t dst_x, int16_t dst_y, con
   jd_.setMaxOutputSize(8 * 2048);
   jd_.setPixelType(rgb565_big_endian_ ? RGB565_BIG_ENDIAN : RGB565_LITTLE_ENDIAN);
 
+  // Blocks are MCU-aligned and may extend past the image; clip them to the tile and the display.
+  sw_clip_x1_ = std::min<int>(dst_x + jd_.getWidth(), display_width_);
+  sw_clip_y1_ = std::min<int>(dst_y + jd_.getHeight(), display_height_);
+
   const int rc = jd_.decode(dst_x, dst_y, 0);
   if (rc == 0) {
     ESP_LOGE(TAG, "decode rc=%d err=%d", rc, jd_.getLastError());
@@ -523,29 +629,30 @@ int RemoteWebView::jpeg_draw_cb_s_(JPEGDRAW *p) {
 }
 
 int RemoteWebView::jpeg_draw_cb_(JPEGDRAW *p) {
-  int32_t x = p->x, y = p->y, w = p->iWidth, h = p->iHeight;
-  
-  if (x >= display_width_ || y >= display_height_) return 1;
-  if (x + w > display_width_) w = display_width_ - x;
-  if (y + h > display_height_) h = display_height_ - y;
-  if (w <= 0 || h <= 0) return 1;
-
-  display_->draw_pixels_at(
-      x, y, w, h,
-      (const uint8_t *)p->pPixels,
-      esphome::display::COLOR_ORDER_RGB,
-      esphome::display::COLOR_BITNESS_565,
-      rgb565_big_endian_
-  );
-
+  // Rows in pPixels are p->iWidth pixels apart, even when only part of the block is drawn.
+  draw_rgb565_clipped_(p->x, p->y, p->iWidth, p->iHeight, p->iWidth, (const uint8_t *)p->pPixels,
+                       sw_clip_x1_, sw_clip_y1_);
   return 1;
+}
+
+void RemoteWebView::draw_rgb565_clipped_(int x, int y, int w, int h, int stride, const uint8_t *pixels,
+                                         int clip_x1, int clip_y1) {
+  int x_off = 0, y_off = 0;
+  if (x < 0) { x_off = -x; w += x; x = 0; }
+  if (y < 0) { y_off = -y; h += y; y = 0; }
+  if (x + w > clip_x1) w = clip_x1 - x;
+  if (y + h > clip_y1) h = clip_y1 - y;
+  if (w <= 0 || h <= 0) return;
+
+  display_->draw_pixels_at(x, y, w, h, pixels,
+                           esphome::display::COLOR_ORDER_RGB,
+                           esphome::display::COLOR_BITNESS_565,
+                           rgb565_big_endian_,
+                           x_off, y_off, stride - x_off - w);
 }
 
 bool RemoteWebView::ws_send_touch_event_(proto::TouchType type, int x, int y, uint8_t pid) {
   if (touch_disabled_)
-    return false;
-
-  if (!ws_client_ || !ws_send_mtx_ || !esp_websocket_client_is_connected(ws_client_))
     return false;
 
   if (x < 0) x = 0; if (y < 0) y = 0;
@@ -554,17 +661,11 @@ bool RemoteWebView::ws_send_touch_event_(proto::TouchType type, int x, int y, ui
   uint8_t pkt[sizeof(proto::TouchPacket)];
   const size_t n = proto::build_touch_packet(type, pid, x, y, pkt);
 
-  const TickType_t to = pdMS_TO_TICKS(50);
-  if (xSemaphoreTake(ws_send_mtx_, pdMS_TO_TICKS(10)) != pdTRUE)
-    return false;
-
-  int r = esp_websocket_client_send_bin(ws_client_, (const char*)pkt, (int)n, to);
-  xSemaphoreGive(ws_send_mtx_);
-  return r == (int)n;
+  return ws_send_bin_(pkt, n, pdMS_TO_TICKS(10), pdMS_TO_TICKS(50));
 }
 
 bool RemoteWebView::ws_send_open_url_(const char *url, uint16_t flags) {
-  if (!ws_client_ || !ws_send_mtx_ ||  !url || !esp_websocket_client_is_connected(ws_client_))
+  if (!url || !connected_client_())
     return false;
 
   const uint32_t n = (uint32_t) strlen(url);
@@ -577,70 +678,147 @@ bool RemoteWebView::ws_send_open_url_(const char *url, uint16_t flags) {
   if (!pkt) return false;
 
   const size_t written = proto::build_open_url_packet(url, flags, pkt, total);
-  bool ok = false;
-  if (written) {
-    if (xSemaphoreTake(ws_send_mtx_, pdMS_TO_TICKS(50)) == pdTRUE) {
-      const int r = esp_websocket_client_send_bin(ws_client_, (const char *) pkt, (int) written, pdMS_TO_TICKS(200));
-      xSemaphoreGive(ws_send_mtx_);
-      ok = (r == (int) written);
-    }
-  }
+  const bool ok = written && ws_send_bin_(pkt, written, pdMS_TO_TICKS(50), pdMS_TO_TICKS(200));
   free(pkt);
   return ok;
 }
 
 bool RemoteWebView::ws_send_keepalive_() {
-  if (!ws_client_ || !ws_send_mtx_ || !esp_websocket_client_is_connected(ws_client_))
-    return false;
-
   uint8_t pkt[sizeof(proto::KeepalivePacket)];
   const size_t n = proto::build_keepalive_packet(pkt);
-  if (!n) return false;
-
-  const TickType_t to = pdMS_TO_TICKS(50);
-  if (xSemaphoreTake(ws_send_mtx_, to) != pdTRUE)
-    return false;
-
-  const int r = esp_websocket_client_send_bin(ws_client_, (const char*)pkt, (int)n, to);
-  xSemaphoreGive(ws_send_mtx_);
-  return r == (int)n;
+  return n && ws_send_bin_(pkt, n, pdMS_TO_TICKS(50), pdMS_TO_TICKS(50));
 }
 
+bool RemoteWebView::ws_send_request_full_frame_() {
+  uint8_t pkt[sizeof(proto::RequestFullFramePacket)];
+  const size_t n = proto::build_request_full_frame_packet(pkt);
+  return n && ws_send_bin_(pkt, n, pdMS_TO_TICKS(50), pdMS_TO_TICKS(50));
+}
+
+esp_websocket_client_handle_t RemoteWebView::connected_client_() const {
+  esp_websocket_client_handle_t client = ws_client_.load();
+  return (client && esp_websocket_client_is_connected(client)) ? client : nullptr;
+}
+
+bool RemoteWebView::ws_send_bin_(const uint8_t *data, size_t len, TickType_t lock_timeout, TickType_t send_timeout) {
+  // Load the handle once: ws_client_ is cleared by the WS task on disconnect.
+  esp_websocket_client_handle_t client = connected_client_();
+  if (!client || !ws_send_mtx_)
+    return false;
+
+  if (xSemaphoreTake(ws_send_mtx_, lock_timeout) != pdTRUE)
+    return false;
+
+  const int r = esp_websocket_client_send_bin(client, (const char *)data, (int)len, send_timeout);
+  xSemaphoreGive(ws_send_mtx_);
+  return r == (int)len;
+}
+
+// url_ is written from the main loop (open_url) and read by the WS task on (re)connect.
+// Without the mutex (before setup or if it failed) no tasks are running, so direct access is safe.
+std::string RemoteWebView::get_url_() const {
+  if (!state_mtx_) return url_;
+  xSemaphoreTake(state_mtx_, portMAX_DELAY);
+  std::string url = url_;
+  xSemaphoreGive(state_mtx_);
+  return url;
+}
+
+void RemoteWebView::set_url_(const std::string &url) {
+  if (!state_mtx_) { url_ = url; return; }
+  xSemaphoreTake(state_mtx_, portMAX_DELAY);
+  url_ = url;
+  xSemaphoreGive(state_mtx_);
+}
+
+// ESPHome touch states are bit flags: a point reported by the latest scan is PRESSED or UPDATED,
+// a point missing from it gets RELEASING or'ed in and then becomes RELEASED (0).
+// STATE_CALIBRATE (all bits set) means uncalibrated coordinates and is treated as not down.
+static inline bool touch_point_is_down(const touchscreen::TouchPoint &p) {
+  return (p.state & (touchscreen::STATE_PRESSED | touchscreen::STATE_UPDATED)) != 0 &&
+         (p.state & touchscreen::STATE_RELEASING) == 0;
+}
+
+// The server handles a single touch point, so only one (primary) pointer is forwarded.
+// ESPHome calls update() before touch()/release() for the same scan, so update() drives the
+// gesture and touch()/release() only cover what it missed. Each transition is sent once.
 void RemoteWebViewTouchListener::update(const touchscreen::TouchPoints_t &pts) {
   if (!parent_) return;
 
-  const uint64_t now = esp_timer_get_time();
+  if (active_) {
+    for (auto &p : pts) {
+      if (p.id == active_id_ && touch_point_is_down(p)) {
+        move_to_(p.x, p.y);
+        return;
+      }
+    }
+    end_();
+    // Other fingers may still be down; don't turn them into a new gesture.
+    for (auto &p : pts) {
+      if (touch_point_is_down(p)) { wait_all_up_ = true; break; }
+    }
+    return;
+  }
+
+  bool any_down = false;
   for (auto &p : pts) {
-    switch (p.state) {
-      case touchscreen::STATE_PRESSED:
-        parent_->ws_send_touch_event_(proto::TouchType::Down, p.x, p.y, p.id);
-        break;
-      case touchscreen::STATE_UPDATED:
-        if (!RemoteWebView::kCoalesceMoves || RemoteWebView::kMoveIntervalUs == 0 ||
-            (now - parent_->last_move_us_) >= RemoteWebView::kMoveIntervalUs) {
-          parent_->last_move_us_ = now;
-          parent_->ws_send_touch_event_(proto::TouchType::Move, p.x, p.y, p.id);
-        }
-        break;
-      case touchscreen::STATE_RELEASING:
-      case touchscreen::STATE_RELEASED:
-        parent_->ws_send_touch_event_(proto::TouchType::Up, p.x, p.y, p.id);
-        break;
-      default: break;
+    if (!touch_point_is_down(p)) continue;
+    any_down = true;
+    if (!wait_all_up_) {
+      begin_(p);
+      return;
     }
   }
+  if (!any_down) wait_all_up_ = false;
+}
+
+void RemoteWebViewTouchListener::touch(touchscreen::TouchPoint tp) {
+  if (!parent_ || active_ || wait_all_up_) return;
+  begin_(tp);
 }
 
 void RemoteWebViewTouchListener::release() {
   if (!parent_) return;
-  
-  parent_->ws_send_touch_event_(proto::TouchType::Up, 0, 0, 0);
+  if (active_) end_();
+  wait_all_up_ = false;
 }
 
-void RemoteWebViewTouchListener::touch(touchscreen::TouchPoint tp) {
-  if (!parent_) return;
-  
-  parent_->ws_send_touch_event_(proto::TouchType::Down, tp.x, tp.y, tp.id);
+void RemoteWebViewTouchListener::begin_(const touchscreen::TouchPoint &p) {
+  if (!parent_->ws_send_touch_event_(proto::TouchType::Down, p.x, p.y, p.id)) {
+    // Not sent (disconnected or touch disabled): ignore the rest of this gesture.
+    wait_all_up_ = true;
+    return;
+  }
+  active_ = true;
+  active_id_ = p.id;
+  last_x_ = p.x;
+  last_y_ = p.y;
+  last_move_us_ = esp_timer_get_time();
+  move_pending_ = false;
+}
+
+void RemoteWebViewTouchListener::move_to_(int x, int y) {
+  if (x == last_x_ && y == last_y_ && !move_pending_) return;
+  last_x_ = x;
+  last_y_ = y;
+
+  const uint64_t now = esp_timer_get_time();
+  if (RemoteWebView::kCoalesceMoves && RemoteWebView::kMoveIntervalUs != 0 &&
+      (now - last_move_us_) < RemoteWebView::kMoveIntervalUs) {
+    move_pending_ = true;  // sent with a later update or right before Up
+    return;
+  }
+  last_move_us_ = now;
+  move_pending_ = false;
+  parent_->ws_send_touch_event_(proto::TouchType::Move, x, y, active_id_);
+}
+
+void RemoteWebViewTouchListener::end_() {
+  if (move_pending_)
+    parent_->ws_send_touch_event_(proto::TouchType::Move, last_x_, last_y_, active_id_);
+  parent_->ws_send_touch_event_(proto::TouchType::Up, last_x_, last_y_, active_id_);
+  active_ = false;
+  move_pending_ = false;
 }
 
 void RemoteWebView::disable_touch(bool disable) {

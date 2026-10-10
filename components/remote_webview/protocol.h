@@ -9,7 +9,7 @@ constexpr uint8_t kProtocolVersion = 1;
 constexpr uint8_t kFlafLastOfFrame = 1u<<0;
 constexpr uint8_t kFlagIsFullFrame = 1u<<1;
 
-enum class MsgType   : uint8_t { Unknown = 0, Frame = 1, Touch = 2, FrameStats = 3, OpenURL = 4, Keepalive = 5, CurrentURL = 6 };
+enum class MsgType   : uint8_t { Unknown = 0, Frame = 1, Touch = 2, FrameStats = 3, OpenURL = 4, Keepalive = 5, CurrentURL = 6, RequestFullFrame = 7 };
 enum class Encoding  : uint8_t { Unknown = 0, PNG = 1, JPEG = 2, RAW565 = 3, RAW565_RLE = 4, RAW565_LZ4 = 5 };
 enum class TouchType : uint8_t { Unknown = 0, Down = 1, Move = 2, Up = 3 };
 
@@ -81,6 +81,13 @@ struct RWV_PACKED KeepalivePacket {
   uint8_t ver;
 };
 static_assert(sizeof(KeepalivePacket) == 2, "KeepalivePacket wire size must be 2");
+
+// [type:1][ver:1] => 2 bytes
+struct RWV_PACKED RequestFullFramePacket {
+  MsgType type;
+  uint8_t ver;
+};
+static_assert(sizeof(RequestFullFramePacket) == 2, "RequestFullFramePacket wire size must be 2");
 
 #if !defined(__GNUC__)
   #pragma pack(pop)
@@ -180,6 +187,15 @@ inline size_t build_keepalive_packet(uint8_t *out) {
   if (!out) return 0;
   KeepalivePacket pkt{};
   pkt.type = MsgType::Keepalive;
+  pkt.ver  = kProtocolVersion;
+  memcpy(out, &pkt, sizeof(pkt));
+  return sizeof(pkt);
+}
+
+inline size_t build_request_full_frame_packet(uint8_t *out) {
+  if (!out) return 0;
+  RequestFullFramePacket pkt{};
+  pkt.type = MsgType::RequestFullFrame;
   pkt.ver  = kProtocolVersion;
   memcpy(out, &pkt, sizeof(pkt));
   return sizeof(pkt);
