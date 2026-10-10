@@ -204,6 +204,7 @@ text:
 
 - **full_frame_tile_count** set to 1 is the most efficient way to do a full-screen update; use it if your network/device memory allows it.
 - **every_nth_frame** must be 1 if you don’t want to miss changes (though increasing it may reduce server load). I recommend keeping it set to 1.
+- **wifi power_save_mode** — for maximum responsiveness, set `power_save_mode: none` in the `wifi:` section. ESPHome's default power saving lets the radio sleep between packets, which lowers power draw but adds latency: in testing on an ESP32-S3 it added ~30 ms to every update, cut throughput from ~1.6 MB/s to ~330 KB/s and made a full-screen change take 154 ms instead of 88 ms. Keep the default if power draw or Wi-Fi coexistence matters more than speed. The self-test shows the effect ("Wi-Fi: … ms per update").
 - **min_frame_interval** caps how often the server sends frames. It protects the device from frames arriving faster than it can decode them (e.g. while scrolling), so it should be at least the device's decode time for a full-screen frame. Run the self-test (`url: "self-test"`): it measures that time and recommends a value.
 - **max_bytes_per_msg** should be larger than your maximum tile size (full-frame or partial).
 - **jpeg_quality** — lower values encode faster and reduce bandwidth (but increase artifacts). Start at **85**, drop toward **70–75** if you need speed.

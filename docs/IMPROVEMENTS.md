@@ -20,7 +20,7 @@ Items marked **(verify)** depend on behavior that still has to be confirmed on a
 | C10 | Minor issues | 🟡 Partly done | `1d54780`, `eeb473a` |
 | C11 | Watchdog reset under a continuous stream of frames | ✅ Done | `de0b456` |
 | P1 | `-O2` instead of `-Os` | ✅ Measured: ~4%, not worth recommending | `bba7909` |
-| P2 | Wi-Fi power save, lwIP tuning | ⬜ Open | — |
+| P2 | Wi-Fi power save, lwIP tuning | 🟡 `power_save_mode: none` measured and documented; lwIP open | — |
 | P3 | Logging in hot paths | ✅ Done | `eeb473a`, `de0b456` |
 | P4 | Instrumentation | ✅ Done (`stats_interval`) | `fe5becb`, `5520c71` |
 | P5 | Receive buffer pool | ⬜ Open, low priority | — |
@@ -131,7 +131,9 @@ Done: random device-ID fallback (`1d54780`), URL-encoded `device_id`, rate-limit
 ### P2. Wi-Fi and network settings
 
 YAML-only experiments, measure with `stats_interval` (touch → content):
-- `wifi: power_save_mode: none` — ESPHome's default light sleep adds latency per packet.
+- ✅ `wifi: power_save_mode: none` — measured on ESP32-S3: default power saving added ~30 ms per update,
+  cut throughput from ~1.6 MB/s to ~330 KB/s, and a full-screen change took 154 ms instead of 88 ms.
+  Recommended in README.
 - `CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0: y` — keeps lwIP off CPU 1, which is left to `loopTask` and decoding.
 - Optionally `CONFIG_LWIP_TCP_WND_DEFAULT`, `CONFIG_LWIP_TCP_RECVMBOX_SIZE`,
   `CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM`, `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP` — only if rx time shows up.
