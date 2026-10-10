@@ -169,6 +169,8 @@ class RemoteWebView : public Component {
   uint32_t st_loss_seq_{0};
   std::atomic<uint32_t> q_hwm_{0};            // max decode queue depth, WS client task
   std::atomic<uint32_t> full_frame_reqs_{0};  // full-frame requests sent, rwv_ws
+  uint32_t drops_since_log_{0};    // WS client task only
+  int64_t  last_drop_log_us_{0};   // WS client task only
 
   // Touch-to-frame latency: the main loop stamps each touch Up sent; the decode task
   // tracks frames that started arriving after it, within cfg::touch_latency_window_us.

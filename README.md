@@ -204,7 +204,7 @@ text:
 
 - **full_frame_tile_count** set to 1 is the most efficient way to do a full-screen update; use it if your network/device memory allows it.
 - **every_nth_frame** must be 1 if you don’t want to miss changes (though increasing it may reduce server load). I recommend keeping it set to 1.
-- **min_frame_interval** should be slightly larger than the render time reported by the self-test (set `self-test` as a url parameter in the YAML).
+- **min_frame_interval** caps how often the server sends frames. It protects the device from frames arriving faster than it can decode them (e.g. while scrolling), so it should be at least the device's decode time for a full-screen frame. Run the self-test (`url: "self-test"`): it measures that time and recommends a value.
 - **max_bytes_per_msg** should be larger than your maximum tile size (full-frame or partial).
 - **jpeg_quality** — lower values encode faster and reduce bandwidth (but increase artifacts). Start at **85**, drop toward **70–75** if you need speed.
 - **big_endian** — defaults to **true**. If colors look wrong (swapped/tinted), set `big_endian: false` for panels that require little-endian RGB565.

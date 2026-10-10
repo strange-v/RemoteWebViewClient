@@ -381,10 +381,17 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
         m.rx_start_us = r->start_us;
         m.enqueue_us = esp_timer_get_time();
         r->buf = nullptr; r->total = 0; r->filled = 0;
-        if (!self_->q_decode_ || xQueueSend(self_->q_decode_, &m, 0) != pdTRUE) {
-          ESP_LOGE(TAG, "decode queue full, dropping packet");
+        if (!self_->q_decode_ ||
+            xQueueSend(self_->q_decode_, &m, pdMS_TO_TICKS(cfg::decode_enqueue_timeout_ms)) != pdTRUE) {
           free(m.buf);
           self_->note_rx_loss_();
+          self_->drops_since_log_++;
+          const int64_t now = esp_timer_get_time();
+          if (now - self_->last_drop_log_us_ >= cfg::drop_log_interval_us) {
+            ESP_LOGE(TAG, "decode queue full, dropped %u packet(s)", (unsigned)self_->drops_since_log_);
+            self_->drops_since_log_ = 0;
+            self_->last_drop_log_us_ = now;
+          }
         } else {
           const uint32_t depth = (uint32_t)uxQueueMessagesWaiting(self_->q_decode_);
           if (depth > self_->q_hwm_.load()) self_->q_hwm_.store(depth);
@@ -405,7 +412,7 @@ void RemoteWebView::ws_event_handler_(void *handler_arg, esp_event_base_t, int32
 }
 
 bool RemoteWebView::start_decode_task_() {
-  return xTaskCreatePinnedToCore(&RemoteWebView::decode_task_tramp_, "rwv_decode", cfg::decode_task_stack, this, 6, &t_decode_, 1) == pdPASS;
+  return xTaskCreatePinnedToCore(&RemoteWebView::decode_task_tramp_, "rwv_decode", cfg::decode_task_stack, this, cfg::decode_task_prio, &t_decode_, 1) == pdPASS;
 }
 
 void RemoteWebView::decode_task_tramp_(void *arg) {
@@ -593,7 +600,7 @@ void RemoteWebView::process_frame_packet_(const uint8_t *data, size_t len)
     frame_stats_bytes_ += frame_bytes_;
     frame_stats_time_ += time_ms;
     frame_stats_count_++;
-    ESP_LOGD(TAG, "frame %lu: tiles %u (%u bytes) - %lu ms", frame_id_, frame_tiles_, frame_bytes_, time_ms);
+    ESP_LOGV(TAG, "frame %lu: tiles %u (%u bytes) - %lu ms", frame_id_, frame_tiles_, frame_bytes_, time_ms);
 
     if (frame_failed_tiles_)
       ESP_LOGW(TAG, "frame %lu: %u of %u tiles failed", frame_id_, frame_failed_tiles_, frame_tiles_);
