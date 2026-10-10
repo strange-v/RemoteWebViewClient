@@ -194,6 +194,7 @@ void RemoteWebView::dump_config() {
   print_opt_int   ("max_bytes_per_msg",         max_bytes_per_msg_);
   print_opt_int   ("big_endian",                rgb565_big_endian_);
   print_opt_int   ("rotation",                  rotation_);
+  print_opt_float2("scale",                     scale_);
 }
 
 bool RemoteWebView::open_url(const std::string &s) {
@@ -1085,6 +1086,7 @@ std::string RemoteWebView::build_ws_uri_() const {
   append_q_int_(uri, "h", display_height_);
 
   append_q_int_(uri,   "r",    rotation_);
+  append_q_float_(uri, "s",    scale_);
   append_q_int_(uri,   "ts",   tile_size_);
   append_q_int_(uri,   "fftc", full_frame_tile_count_);
   append_q_float_(uri, "ffat", full_frame_area_threshold_);

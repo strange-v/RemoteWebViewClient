@@ -51,6 +51,7 @@ class RemoteWebView : public Component {
   void set_hw_decode_timeout_ms(int v) { hw_decode_timeout_ms_ = v; }
   void set_stats_interval(uint32_t ms) { stats_interval_ms_ = ms; }
   void set_rotation(int v) { rotation_ = v; }
+  void set_scale(float v) { scale_ = v; }
   void disable_touch(bool disable);
   bool open_url(const std::string &s);
   std::string get_current_url() const;
@@ -119,6 +120,7 @@ class RemoteWebView : public Component {
   bool hw_decode_{true};
   int hw_decode_timeout_ms_{200};
   int rotation_{0};
+  float scale_{-1.0f};
   bool touch_disabled_{false};
 
 #if REMOTE_WEBVIEW_HW_JPEG
