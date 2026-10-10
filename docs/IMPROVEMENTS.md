@@ -1,271 +1,161 @@
 # ESP32 client: correctness and performance improvements
 
-Review of `components/remote_webview` (branch `hw_test`, commit `e89c3e4`).
-Static analysis only: nothing here has been built or measured on hardware.
-Items marked **(verify)** depend on library behavior that should be confirmed on a device.
+Review of `components/remote_webview`, started from `hw_test` (`e89c3e4`). Work is on branch `improvements`.
+Measurements were taken on an ESP32-S3 (480×480 `st7701s` RGB panel, `gt911` touch, software JPEG).
+Items marked **(verify)** depend on behavior that still has to be confirmed on a device.
 
-The overall architecture is sound: WebSocket receive and JPEG decode run in separate tasks,
-software JPEG output is drawn in blocks, and ESPHome automations are dispatched from `loop()`.
-The issues below are about robustness at the edges and about throughput/latency.
+## Status
 
-## Priority overview
+| ID | Area | Status | Commit |
+|----|------|--------|--------|
+| C1 | Bounds checks overflow on 32-bit | ✅ Done | `6627ae2` |
+| C2 | WebSocket reconnect logic | ✅ Done | `6627ae2` |
+| C3 | Dropped packets leave stale screen regions | ✅ Done (full-frame request + bounded backpressure) | `6627ae2`, `de0b456` |
+| C4 | Clipped JPEG blocks drawn with wrong stride | ✅ Done | `6627ae2` |
+| C5 | Duplicate / malformed touch events | ✅ Done | `6627ae2` |
+| C6 | Data races between tasks | ✅ Done | `6627ae2` |
+| C7 | Unchecked resource creation, init order | ✅ Done | `6627ae2` |
+| C8 | Decode failures ignored | ✅ Done | `6627ae2` |
+| C9 | Display accessed from a non-main task | 🟡 Documented; validation open | `bc2a75f` |
+| C10 | Minor issues | 🟡 Partly done | `1d54780`, `eeb473a` |
+| C11 | Watchdog reset under a continuous stream of frames | ✅ Done | `de0b456` |
+| P1 | `-O2` instead of `-Os` | ✅ Measured: ~4%, not worth recommending | `bba7909` |
+| P2 | Wi-Fi power save, lwIP tuning | ⬜ Open | — |
+| P3 | Logging in hot paths | ✅ Done | `eeb473a`, `de0b456` |
+| P4 | Instrumentation | ✅ Done (`stats_interval`) | `fe5becb`, `5520c71` |
+| P5 | Receive buffer pool | ⬜ Open, low priority | — |
+| P6 | P4 HW decoder input buffer size | ⬜ Open | — |
+| P9 | Non-blocking touch sends | ⬜ Open, low priority | — |
+| P10 | Memory footprint | ⬜ Open, low priority | — |
 
-| ID | Area | Severity | Effort |
-|----|------|----------|--------|
-| C1 | Bounds checks overflow on 32-bit | High (memory safety) | Small |
-| C2 | WebSocket reconnect logic fights the client library | High (reliability) | Small |
-| C3 | Dropped packets leave stale screen regions | High (visual) | Medium |
-| C4 | Clipped JPEG blocks drawn with wrong stride | Medium (visual) | Small |
-| C5 | Duplicate / malformed touch events | Medium (UX) | Medium |
-| C6 | Data races between tasks | Medium | Small–Medium |
-| C7 | Unchecked resource creation, init order | Medium | Small |
-| C8 | Decode failures ignored | Low–Medium | Small |
-| C9 | Display accessed from a non-main task | Low (config dependent) | — |
-| C10 | Minor issues | Low | Small |
-| P1–P10 | Performance | — | see below |
-
-Suggested order: C1, C2, C3 + C8, C5, C4, then add instrumentation (P4) and only then the buffer/pipeline work.
+Dropped after measuring: **P7** (fewer copies / pipelining on the P4 hardware path) and **P8** (decode from
+internal RAM). The client is ~20% of the touch-to-content latency, decoding is bound by per-pixel work in
+JPEGDEC's SIMD assembly, and drawing to the RGB framebuffer is cheap. Neither would change what the user sees.
 
 ---
 
-## Correctness
+## Baseline measurements
 
-### C1. Bounds checks can overflow (memory safety)
+`stats_interval: 10s`, `-O2`, before the C11 change.
 
-- `remote_webview.cpp:397` — `if (off + th.dlen > len) return;`
-- `remote_webview.cpp:41` — `if (sizeof(proto::CurrentURLHeader) + hdr->url_len > len) return;`
-
-`size_t` is 32-bit on ESP32. A `dlen`/`url_len` close to `0xFFFFFFFF` wraps the sum, the check passes, and
-the decoder reads out of bounds (tile) or `std::string` tries to allocate ~4 GB and aborts (URL).
-
-Fix: compare against the remaining length instead of adding.
-
-```cpp
-if (off > len || th.dlen > len - off) return;
-// ...
-const size_t avail = len - sizeof(proto::CurrentURLHeader);
-if (hdr->url_len > avail) return;
-```
-
-Also validate tile geometry: `th.x + th.w <= display_width_`, `th.y + th.h <= display_height_`
-(currently only `w`/`h` alone are checked), and that the decoded JPEG size matches `th.w`/`th.h`.
-The `(int16_t)th.x` cast turns coordinates above 32767 into negative values.
-
-### C2. WebSocket reconnect logic
-
-- `remote_webview.cpp:273`, `:282` — `DISCONNECTED`/`CLOSED` handlers call `websocket_force_reconnect()`,
-  i.e. `esp_websocket_client_stop()` + `start()`. Espressif documents that `stop()` must not be called from the
-  WebSocket event handler (it runs in the client task). The library returns `ESP_FAIL` and logs an error;
-  `start()` then fails too because the client is still running. Return values are ignored, so these calls are
-  no-ops that only spam the log.
-- `remote_webview.cpp:231` — the `rwv_ws` watchdog does stop+start every 5 s while disconnected, while
-  auto-reconnect is also enabled (`reconnect_timeout_ms = 2000`, `network_timeout_ms = 10000`). A connect
-  attempt that takes longer than ~5 s (slow DNS, weak Wi-Fi) gets killed and restarted, so the client may
-  never connect.
-- `remote_webview.cpp:225-226` — `ESP_ERROR_CHECK` on `init`/`register_events`/`start`: if
-  `esp_websocket_client_init()` returns `NULL` (low memory) the device aborts and boot-loops.
-
-Fix:
-- Remove `websocket_force_reconnect()` from the event handler.
-- Pick one strategy: rely on built-in auto-reconnect (and drop the 5 s stop/start), **or** set
-  `disable_auto_reconnect = true` and own reconnection in `rwv_ws` with backoff, triggered only after a
-  disconnect has persisted longer than `network_timeout_ms`.
-- Replace `ESP_ERROR_CHECK` with logged error handling and a retry/`mark_failed()`.
-
-Docs: https://docs.espressif.com/projects/esp-protocols/esp_websocket_client/docs/latest/index.html
-
-### C3. Dropped packets leave stale screen regions
-
-`remote_webview.cpp:323` — when the decode queue is full the packet is freed and dropped. The server sends only
-changed tiles, so a dropped tile stays stale until the next full frame (which may be never if
-`full_frame_every` is not set).
-
-Options (combine):
-1. **Backpressure** — `xQueueSend(q, &m, pdMS_TO_TICKS(N))` with a meaningful timeout. Blocking the WS task
-   stops reading the socket, the TCP window fills and the server slows down naturally.
-2. **Recovery** — when a packet is dropped (or a tile fails to decode, see C8), request a full frame from the
-   server. This needs a small protocol addition (e.g. a `RequestFullFrame` message type) on both sides.
-
-Simply increasing queue depth only hides overload and adds latency: 12 × 60 KiB already allows ~720 KiB of
-buffered payload in PSRAM.
-
-### C4. Clipped JPEG blocks are drawn with the wrong stride
-
-`remote_webview.cpp:525-539` (`jpeg_draw_cb_`): when the block crosses the right edge, `w` is reduced, but the
-pixel buffer is passed as if rows were `w` pixels wide. Rows are actually `p->iWidth` wide, so every row after
-the first is shifted — the image is skewed for multi-row blocks.
-
-Fix: use the stride-aware overload of `Display::draw_pixels_at`:
-
-```cpp
-display_->draw_pixels_at(x, y, w, h, (const uint8_t *) p->pPixels,
-                         display::COLOR_ORDER_RGB, display::COLOR_BITNESS_565, rgb565_big_endian_,
-                         /*x_offset=*/0, /*y_offset=*/0, /*x_pad=*/p->iWidth - w);
-```
-
-Also handle negative `x`/`y` via `x_offset`/`y_offset`, and **(verify)** use `p->iWidthUsed` (JPEGDEC reports
-MCU-aligned `iWidth`; padding pixels beyond the real image width can overwrite the neighbouring tile).
-
-The hardware path (`remote_webview.cpp:490`) does no clipping at all: it draws `hdr.width × hdr.height` at
-`dst_x, dst_y` regardless of display bounds. Apply the same clipping (stride = `aligned_w`).
-
-### C5. Touch events
-
-`remote_webview.cpp:609-644`
-
-- ESPHome calls `touch()` on the first contact **and** `update()` with the point in `STATE_PRESSED`, so `Down`
-  is sent twice.
-- `Up` can be sent from `update()` (`RELEASING` and `RELEASED`) and again from `release()`.
-- `release()` sends `Up(0, 0, id=0)` — the server may move the pointer to the top-left corner before releasing.
-- **(verify)** ESPHome touch states are bit flags (`STATE_PRESSED | STATE_RELEASING`, etc.). The `switch`
-  matches exact values only, so combined states fall into `default` and are ignored.
-- `last_move_us_` is shared by all pointers: moves of a second finger are suppressed by the first one.
-
-Fix: keep a small table of active pointer IDs with last known coordinates. Emit each transition exactly once:
-`Down` when an ID appears, `Move` (rate-limited per ID) while present, `Up` with last known coordinates when it
-disappears. Ignore `touch()`/`release()` or use them only as a fallback. Test bit flags with `&`.
-
-ESPHome source: https://api-docs.esphome.io/touchscreen_8cpp_source
-
-### C6. Data races between tasks
-
-| Field | Writers | Readers |
+| Scenario | Metric | Value |
 |---|---|---|
-| `url_` (`std::string`) | main loop (`open_url`) | WS event handler (`url_.c_str()` on reconnect) |
-| `ws_client_` | WS event handler | main loop (touch, `open_url`), decode task (stats), `rwv_ws` |
-| `last_keepalive_us_` (64-bit) | WS event handler, `rwv_ws` | `rwv_ws` |
+| Full frame 480×480 | decode / draw | ~35 / ~8 ms |
+| Full frame | decode vs. JPEG size | 1.6 KB → 23 ms, 23 KB → 45 ms (pixel-bound) |
+| Partial frame | total | 6–12 ms |
+| Tab switch | touch → first frame | ~35 ms |
+| Tab switch | touch → page content | ~230 ms (max 365) |
+| All | client CPU busy at normal use | ~3% |
+| All | dropped / queue max | 0 / ≤ 2 of 12 |
 
-`url_` is the dangerous one: reallocating the string while another task reads `c_str()` is a use-after-free.
-
-Fix: protect `url_` with `state_mtx_` (copy under the lock, send outside). Make `ws_client_` an
-`std::atomic<esp_websocket_client_handle_t>` or, simpler, store the handle once in `rwv_ws` and track a separate
-`std::atomic<bool> connected_`. `process_frame_stats_packet_` should also check the client/connection before
-sending.
-
-### C7. Resource creation and init order
-
-`remote_webview.cpp:77-82`
-
-- Results of `xQueueCreate`, `xSemaphoreCreateMutex`, `xTaskCreatePinnedToCore` are not checked.
-  On failure call `mark_failed()` instead of continuing in a half-initialized state.
-- Tasks are started **before** the hardware JPEG decoder and its buffers are initialized (P4). The decode task
-  can observe `hw_dec_`/buffers mid-initialization. Start tasks at the end of `setup()`.
-- If `display_` is missing, `setup()` returns silently; prefer `mark_failed()`.
-
-### C8. Decode failures are ignored
-
-`remote_webview.cpp:405` — the result of `decode_jpeg_tile_to_lcd_()` is discarded and `frame_update_pending_`
-is set even if every tile failed. Count failures per frame, log once per frame, request recovery (C3), and do
-not fire `on_frame_update` for a failed frame (or expose the failure).
-
-### C9. Display accessed from a non-main task
-
-`draw_pixels_at` is called from `rwv_decode`, while ESPHome may access the same display from the main loop
-(display `lambda`, `update_interval`, `show_test_card`, `auto_clear`). The README examples use
-`update_interval: never`, which is safe, but this is an undocumented requirement. Document it in README (or
-enforce it in `__init__.py` by validating the display config).
-
-### C10. Minor
-
-- `REMOTE_WEBVIEW_HAS_CACHE_MSYNC` / `esp_cache.h` are unused (`remote_webview.h:24-29`).
-- `espressif/esp-dsp` is declared in `idf_component.yml` but not referenced by this component; remove it if
-  the JPEGDEC fork does not need it.
-- `remote_webview.cpp:715` — fallback writes an ASCII string into the MAC byte array via `snprintf`;
-  generate random bytes directly instead.
-- `device_id` and other query values are not URL-encoded in `build_ws_uri_()`.
-- **(verify)** HW decoder always outputs a fixed RGB565 byte order, but `rgb565_big_endian_` is passed to
-  `draw_pixels_at` on that path too. Confirm colors are correct with both `big_endian` settings.
-- `ESP_LOGW` per tile on the HW fallback paths (`:459`, `:464`) can flood the log; log once.
+Takeaway: in normal use the client is not the bottleneck. Most of the tab-switch latency is the browser
+rendering the new view plus the server pipeline.
 
 ---
 
-## Performance
+## Done
 
-### P1. Build with `-O2` instead of `-Os`
+**C1. Bounds checks.** Length checks compare against the remaining length (`th.dlen > len - off`,
+`url_len > len - header`) instead of adding, so they can't wrap. Tiles whose origin is outside the display are
+rejected. The decoded JPEG size is not compared with the tile header; C4 clipping makes that harmless.
 
-README and examples set `COMPILER_OPTIMIZATION_SIZE: y`. JPEGDEC (Huffman + IDCT + color conversion) is
-CPU-bound and benefits noticeably from `CONFIG_COMPILER_OPTIMIZATION_PERF: y`. Probably the cheapest win for
-the software path on S3. Measure before/after.
+**C2. Reconnect.** No `esp_websocket_client_stop()` from the event handler; reconnects are left to the client's
+auto-reconnect. `rwv_ws` restarts the client only after 60 s without a connection. `ESP_ERROR_CHECK` on client
+init was replaced with logged retries, so low memory no longer causes a boot loop.
 
-### P2. Disable Wi-Fi power save and tune lwIP
+**C3 + C8. Lost or failed tiles.** Every message that doesn't reach the decoder and every tile that fails to
+decode marks the screen out of sync. `rwv_ws` then sends `RequestFullFrame` (message type 7, at most every 2 s)
+until a full frame arrives and decodes without any loss. The server re-processes its last screencast frame, so
+this also works on a static page. `on_frame_update` fires only for frames without failed tiles.
 
-The examples do not set `wifi: power_save_mode: none`; ESPHome's default light sleep adds latency and lowers
-throughput. Also worth experimenting with:
+**C4. Clipping.** One helper clips to the tile and display bounds and passes `x_offset`/`y_offset`/`x_pad` to
+`draw_pixels_at`, so row stride stays correct. Used by both the software and the P4 hardware path.
 
-```yaml
-sdkconfig_options:
-  CONFIG_LWIP_TCP_WND_DEFAULT: "65535"
-  CONFIG_LWIP_TCP_RECVMBOX_SIZE: "64"
-  CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM: "64"
-  CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP: "y"
-```
+**C5. Touch.** The server handles a single pointer, so only the first finger is forwarded. Each Down/Move/Up is
+sent once; ESPHome states are tested as bit flags; Up carries the last coordinates; a throttled move is flushed
+before Up; a second finger doesn't start a new gesture until all fingers are lifted.
 
-### P3. Remove logging from hot paths
+**C6. Data races.** `url_` is guarded by `state_mtx_`; `ws_client_` and `last_keepalive_us_` are atomics; all
+sends go through `ws_send_bin_()`, which loads the client handle once.
 
-ESPHome's default log level is DEBUG, so `ESP_LOGD` per frame (`remote_webview.cpp:416`) and the per-tile
-warnings are actually formatted and printed. Move per-frame/per-tile logs to `ESP_LOGV` or rate-limit them.
+**C7. Init.** Queue, mutex and task creation are checked (`mark_failed()` on failure); tasks start after the
+hardware decoder is initialized.
 
-### P4. Instrument before optimizing further
+**C11. Watchdog under a continuous stream of full frames.** Reproduced with frames sent back to back: the decode
+queue stayed full, packets were dropped, and `loopTask` starved until the task watchdog reset the device.
+- The WS handler waits up to 1 s for space in the decode queue before dropping. While it waits the socket isn't
+  read, so TCP flow control lets the server's backpressure skip stale frames. The handler runs without the
+  client lock (checked in `esp_websocket_client` 1.5.0), so touch sends and pings are not blocked.
+- `rwv_decode` runs at priority 1, the same as ESPHome's `loopTask` on CPU 1. FreeRTOS time-slices equal
+  priorities every tick, so touch input is handled within ~1 ms even during a 45 ms full-frame decode, while
+  the mostly idle `loopTask` costs decoding almost nothing. A higher priority delays touch input by a whole
+  frame decode; CPU 0 would compete with Wi-Fi/lwIP and starve `IDLE0`, which the watchdog checks.
+  `IDLE1` is not checked (`CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n`).
+- `FrameStats` still goes through the decode queue, so its reply still means "everything before it is drawn".
 
-`frame_start_us_` is set when the first packet of a frame is **dequeued**, so the reported stats exclude queue
-wait time and don't show full client latency. Add separate timings for:
-- receive → enqueue (timestamp in `WsMsg`),
-- queue wait,
-- JPEG decode,
-- draw (`draw_pixels_at`),
-- queue high-water mark and drop count.
+**P1. `-O2`.** Measured with `CONFIG_COMPILER_OPTIMIZATION_PERF=y`: full-frame decode ~36 → ~34.5 ms (~4%).
+The heavy parts of the JPEGDEC fork are SIMD assembly, which compiler flags don't affect. The README line
+`COMPILER_OPTIMIZATION_SIZE: y` had no effect (missing `CONFIG_` prefix) and was removed.
 
-Report them via `FrameStats` or a debug sensor. This shows the real bottleneck (network, decode or panel) and
-makes the later items measurable.
+**P3. Logging.** Per-frame log is VERBOSE; HW fallback reasons are VERBOSE with a summary warning at most every
+10 s; "decode queue full" is logged at most every 5 s with a count.
 
-### P5. Reusable receive buffer pool
-
-Every WS message does `heap_caps_malloc` + `free` in PSRAM (`remote_webview.cpp:304`, `:352`). Preallocate N
-buffers of `max_bytes_per_msg`, hand them out from a "free" queue and return them after decode. This removes
-allocator cost and PSRAM fragmentation, and gives a natural backpressure point (C3): no free buffer → wait.
-
-### P6. Right-size the P4 hardware decoder input buffer
-
-`remote_webview.cpp:106-111` sizes the **input** (compressed) buffer like the decompressed RGB565 frame:
-480×480 → 450 KiB, while the largest message is ~60 KiB. Size it from `max_bytes_per_msg` (or
-`cfg::ws_max_message_bytes`) with the required DMA alignment. The output buffer can stay frame-sized, or be
-sized for the maximum tile if tiles are bounded.
-
-### P7. Fewer copies on the P4 path
-
-Current path: WS buffer → PSRAM reassembly buffer → `memcpy` into DMA input buffer → HW decode → output buffer →
-`draw_pixels_at` (copy to framebuffer). Options:
-- Reassemble directly into DMA-capable memory and decode from there **(verify** that `jpeg_decoder_process`
-  accepts an unaligned input pointer for tiles inside a message).
-- Double-buffer the output so tile N+1 decodes while tile N is being drawn (needs a separate draw step/task).
-
-### P8. Software path: keep compressed data in internal RAM (experiment)
-
-Huffman decoding reads input with poor locality; through the PSRAM cache this is slower than internal RAM. For
-small messages, try reassembling into internal RAM (`MALLOC_CAP_INTERNAL`) when space allows, falling back to
-PSRAM. Gain depends on tile size and cache configuration — measure with P4.
-
-### P9. Keep the main loop non-blocking
-
-Touch sending runs in the ESPHome main loop and can block it up to ~60 ms (10 ms mutex + 50 ms send timeout).
-Push touch events to a small command queue consumed by the WS side (`rwv_ws` or a dedicated sender task). This
-also fits naturally with the per-pointer state machine from C5.
-
-### P10. Memory footprint
-
-- `rwv_decode` has a 32 KiB stack, but `JPEGDEC` is a class member, not on the stack. Check
-  `uxTaskGetStackHighWaterMark()` and shrink; internal RAM is scarce with Wi-Fi + lwIP on S3.
-- `ws_buffer_size = 30 KiB`: **(verify)** where `esp_websocket_client` allocates its RX/TX buffers (internal vs
-  PSRAM depending on `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`).
-- Server-side tuning to measure on S3: `jpeg_quality`, `tile_size`, `full_frame_tile_count`,
-  `min_frame_interval`.
+**P4. Instrumentation.** `stats_interval` logs, per window: fps, KiB/s, per-frame rx / queue / decode / draw /
+total time, queue high-water mark, drops, failed tiles, HW fallbacks, full-frame requests, and touch-to-frame
+latency (first frame and largest frame within 2 s of a touch Up).
 
 ---
 
-## Suggested plan
+## Open
 
-1. **Safety and reliability**: C1, C2, C7, C6 (`url_`).
-2. **Visual correctness**: C3 (backpressure + full-frame request), C8, C4.
-3. **Input**: C5 + P9 (pointer state machine feeding a send queue).
-4. **Measure**: P4, then try P1, P2, P3 and compare.
-5. **Optimize memory/throughput** based on numbers: P5, P6, P7, P8, P10.
+### C9. Display ownership — validation
+
+README states that nothing else may draw to the display (`bc2a75f`). Still open:
+- **Compile-time check** in `__init__.py` (`FINAL_VALIDATE_SCHEMA`): error if the display has `lambda`/`pages`
+  or `update_interval` isn't `never`; warn on `auto_clear_enabled`/`show_test_card`, and when touch shares the
+  display's SPI bus.
+- **Optional `remote_webview.pause` / `resume` actions** to draw an overlay safely: pause decoding, let the user
+  update the display, then resume with a full-frame request (the mechanism from C3 already exists).
+
+### C10. Minor — remaining
+
+Done: random device-ID fallback (`1d54780`), URL-encoded `device_id`, rate-limited HW fallback warnings
+(`eeb473a`). Remaining:
+- `REMOTE_WEBVIEW_HAS_CACHE_MSYNC` / `esp_cache.h` are unused (`remote_webview.h`).
+- `espressif/esp-dsp` in `idf_component.yml` isn't used by this component; remove it if the JPEGDEC fork
+  doesn't need it (the fork has its own SIMD `.S` files).
+- `examples/*.yaml` still contain the ineffective `COMPILER_OPTIMIZATION_SIZE` line.
+- **(verify, needs a P4 device)** The HW decoder outputs a fixed RGB565 byte order, but `rgb565_big_endian_`
+  is passed to `draw_pixels_at` on that path too. Check colors with both `big_endian` settings.
+
+### P2. Wi-Fi and network settings
+
+YAML-only experiments, measure with `stats_interval` (touch → content):
+- `wifi: power_save_mode: none` — ESPHome's default light sleep adds latency per packet.
+- `CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0: y` — keeps lwIP off CPU 1, which is left to `loopTask` and decoding.
+- Optionally `CONFIG_LWIP_TCP_WND_DEFAULT`, `CONFIG_LWIP_TCP_RECVMBOX_SIZE`,
+  `CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM`, `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP` — only if rx time shows up.
+
+### P5. Receive buffer pool (low priority)
+
+Every WS message is `heap_caps_malloc`/`free`d in PSRAM. A pool of N buffers of `max_bytes_per_msg` would remove
+allocator cost and fragmentation and would be a natural backpressure point. Measurements show no allocator
+bottleneck so far; do it only if fragmentation or `malloc failed` shows up in long runs.
+
+### P6. P4 hardware decoder input buffer
+
+`setup()` sizes the compressed **input** buffer like a decompressed RGB565 frame (480×480 → 450 KiB) while the
+largest message is ~60 KiB. Size it from `max_bytes_per_msg` with the required DMA alignment. Saves ~390 KiB of
+PSRAM on ESP32-P4.
+
+### P9. Non-blocking touch sends (low priority)
+
+Touch events are sent from ESPHome's main loop and can block it for up to ~60 ms (10 ms send mutex + 50 ms send
+timeout) if another send holds the mutex or the socket is slow. A small queue drained by `rwv_ws` would keep the
+loop non-blocking. Not observed as a problem so far.
+
+### P10. Memory footprint (low priority)
+
+- `rwv_decode` has a 32 KiB stack although `JPEGDEC` is a class member; check `uxTaskGetStackHighWaterMark()`
+  and shrink to free internal RAM.
+- **(verify)** where `esp_websocket_client` allocates its 30 KiB RX/TX buffers (internal vs PSRAM).
