@@ -210,6 +210,7 @@ text:
 - **big_endian** — defaults to **true**. If colors look wrong (swapped/tinted), set `big_endian: false` for panels that require little-endian RGB565.
 - **hw_decode** — ESP32-P4 only; defaults to **true**. Set to `false` to use the software JPEG decoder.
 - **hw_decode_timeout_ms** — ESP32-P4 only; defaults to **200**. Timeout passed to the hardware JPEG decoder engine.
+- **Display ownership** — `remote_webview` draws from its own task, so nothing else may draw to the same display: use `update_interval: never`, no `lambda`/`pages`, `auto_clear_enabled: false`, `show_test_card: false`, and don't call `component.update` on it. Prefer a touchscreen on a separate bus (e.g. I2C) rather than sharing the display's SPI bus.
 - **Red tile / red screen** — this indicates a tile payload exceeded `max_bytes_per_msg`. Increase `max_bytes_per_msg` or reduce tile size/JPEG quality so each tile fits.
 
 ## On-screen keyboard
