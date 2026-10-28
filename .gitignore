@@ -1,3 +1,5 @@
 web_client/node_modules/
 web_client/dist/
 web_client/tsconfig.tsbuildinfo
+__pycache__/
+*.pyc

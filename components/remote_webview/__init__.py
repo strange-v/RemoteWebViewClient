@@ -4,6 +4,7 @@ import esphome.config_validation as cv
 from esphome import automation
 from esphome.components import display, touchscreen, text_sensor
 from esphome.components.display import validate_rotation
+from esphome.components import esp32
 from esphome.components.esp32 import add_idf_sdkconfig_option
 from esphome.const import CONF_ID, CONF_DISPLAY_ID, CONF_URL, CONF_ROTATION, CONF_TRIGGER_ID
 
@@ -158,6 +159,11 @@ async def to_code(config):
     # handler may wait up to 1 s for space in the decode queue. A separate TX lock keeps
     # FrameAck, touch and keepalive sends from waiting on that.
     add_idf_sdkconfig_option("CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK", True)
+
+    # esp_websocket_client links esp-tls even for plain ws://. ESPHome 2026.10+ compiles the
+    # mbedTLS TLS stack out unless a component requests it; older versions have no hook.
+    if hasattr(esp32, "request_tls"):
+        esp32.request_tls()
 
     for conf in config.get(CONF_ON_FRAME_UPDATE, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
