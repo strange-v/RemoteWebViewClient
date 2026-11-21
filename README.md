@@ -193,7 +193,7 @@ text:
 | `min_frame_interval`    | int (ms)  | ❌       | `80`                              | Minimum time between frames on the wire, in milliseconds. |
 | `jpeg_quality`          | int       | ❌       | `85`                              | JPEG quality hint for the server’s encoder. |
 | `max_bytes_per_msg`     | int (B)   | ❌       | `14336` or `61440`                | Upper bound for a single WS binary message. |
-| `big_endian`            | bool      | ❌       | `true` or `false`                 | Use big-endian RGB565 pixel order for JPEG output (set false for little-endian panels). Default is `true`. |
+| `big_endian`            | bool      | ❌       | `true` or `false`                 | Use big-endian RGB565 output from the software JPEG decoder. Default is `true`. |
 | `rotation`              | int       | ❌       | 0, 90, 180, 270                   | Enables software rotation for both the display and touchscreen. |
 | `scale`                 | float     | ❌       | `1.5`                             | Page zoom (0.5–4). The page is laid out at the display size divided by the scale and rendered at that device scale factor, so text and controls get bigger. For sharp output the server needs `MAX_DEVICE_SCALE_FACTOR` at least this value. |
 | `on_frame_update`       | action    | ❌       | `- logger.log: "The display just received a frame update!"`  | Action that gets triggered each time the display updates (maximum of 1 trigger per second) |
@@ -209,7 +209,7 @@ text:
 - **min_frame_interval** caps how often the server sends frames. It protects the device from frames arriving faster than it can decode them (e.g. while scrolling), so it should be at least the device's decode time for a full-screen frame. Run the self-test (`url: "self-test"`): it measures that time and recommends a value.
 - **max_bytes_per_msg** should be larger than your maximum tile size (full-frame or partial).
 - **jpeg_quality** — lower values encode faster and reduce bandwidth (but increase artifacts). Start at **85**, drop toward **70–75** if you need speed.
-- **big_endian** — defaults to **true**. If colors look wrong (swapped/tinted), set `big_endian: false` for panels that require little-endian RGB565.
+- **big_endian** — match the panel's RGB565 byte order. On ESPHome 2026.11 or later, set `remote_webview.big_endian: false` for little-endian `mipi_dsi` panels to avoid per-pixel byte-order conversion of software-decoded tiles. The ESP32-P4 hardware JPEG decoder produces little-endian RGB565 regardless of this setting, and the client passes that byte order to the display API on ESPHome 2026.11 or later.
 - **hw_decode** — ESP32-P4 only; defaults to **true**. Set to `false` to use the software JPEG decoder.
 - **hw_decode_timeout_ms** — ESP32-P4 only; defaults to **200**. Timeout passed to the hardware JPEG decoder engine.
 - **Display ownership** — `remote_webview` draws from its own task, so nothing else may draw to the same display: use `update_interval: never`, no `lambda`/`pages`, `auto_clear_enabled: false`, `show_test_card: false`, and don't call `component.update` on it. Prefer a touchscreen on a separate bus (e.g. I2C) rather than sharing the display's SPI bus.

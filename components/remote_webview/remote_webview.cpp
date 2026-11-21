@@ -1,6 +1,7 @@
 #include "remote_webview.h"
 #include "remote_webview_config.h"
 #include "esphome/core/log.h"
+#include "esphome/core/version.h"
 
 #include "esp_idf_version.h"
 #include "esp_event.h"
@@ -746,9 +747,10 @@ bool RemoteWebView::decode_jpeg_tile_to_lcd_(int16_t dst_x, int16_t dst_y, const
       return decode_jpeg_tile_software_(dst_x, dst_y, data, len);
     }
 
+    // The P4 JPEG engine writes little-endian RGB565 with this decoder configuration.
     draw_rgb565_clipped_(dst_x, dst_y, (int)hdr.width, (int)hdr.height, aligned_w, hw_decode_output_buf_,
                          std::min<int>(dst_x + (int)hdr.width, display_width_),
-                         std::min<int>(dst_y + (int)hdr.height, display_height_));
+                         std::min<int>(dst_y + (int)hdr.height, display_height_), false);
 
     return true;
   }
@@ -787,12 +789,12 @@ int RemoteWebView::jpeg_draw_cb_s_(JPEGDRAW *p) {
 int RemoteWebView::jpeg_draw_cb_(JPEGDRAW *p) {
   // Rows in pPixels are p->iWidth pixels apart, even when only part of the block is drawn.
   draw_rgb565_clipped_(p->x, p->y, p->iWidth, p->iHeight, p->iWidth, (const uint8_t *)p->pPixels,
-                       sw_clip_x1_, sw_clip_y1_);
+                       sw_clip_x1_, sw_clip_y1_, rgb565_big_endian_);
   return 1;
 }
 
 void RemoteWebView::draw_rgb565_clipped_(int x, int y, int w, int h, int stride, const uint8_t *pixels,
-                                         int clip_x1, int clip_y1) {
+                                         int clip_x1, int clip_y1, [[maybe_unused]] bool pixels_big_endian) {
   int x_off = 0, y_off = 0;
   if (x < 0) { x_off = -x; w += x; x = 0; }
   if (y < 0) { y_off = -y; h += y; y = 0; }
@@ -801,11 +803,17 @@ void RemoteWebView::draw_rgb565_clipped_(int x, int y, int w, int h, int stride,
   if (w <= 0 || h <= 0) return;
 
   const int64_t t0 = esp_timer_get_time();
+#if ESPHOME_VERSION_CODE >= VERSION_CODE(2026, 11, 0)
+  display_->draw_pixels_at(x, y, w, h, pixels, esphome::display::COLOR_BITNESS_565,
+                           pixels_big_endian, x_off, y_off, stride - x_off - w);
+#else
+  // Preserve the configured byte-order flag for legacy display drivers.
   display_->draw_pixels_at(x, y, w, h, pixels,
                            esphome::display::COLOR_ORDER_RGB,
                            esphome::display::COLOR_BITNESS_565,
                            rgb565_big_endian_,
                            x_off, y_off, stride - x_off - w);
+#endif
   ft_draw_us_ += (uint32_t)(esp_timer_get_time() - t0);
 }
 

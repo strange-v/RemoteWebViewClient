@@ -220,9 +220,9 @@ class RemoteWebView : public Component {
   static int jpeg_draw_cb_s_(JPEGDRAW *p);
   int jpeg_draw_cb_(JPEGDRAW *p);
   // Draws a w×h RGB565 region whose source rows are `stride` pixels apart, clipped to
-  // [0, clip_x1) × [0, clip_y1).
+  // [0, clip_x1) × [0, clip_y1). `pixels_big_endian` describes the source buffer.
   void draw_rgb565_clipped_(int x, int y, int w, int h, int stride, const uint8_t *pixels,
-                            int clip_x1, int clip_y1);
+                            int clip_x1, int clip_y1, bool pixels_big_endian);
   JPEGDEC jd_;
   int sw_clip_x1_{0};  // clip bounds of the tile being decoded in software (decode task only)
   int sw_clip_y1_{0};
